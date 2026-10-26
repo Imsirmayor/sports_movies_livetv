@@ -6,9 +6,23 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "build:platform": "pnpm --filter @frankenstein/shared-types --filter @frankenstein/media-worker --filter @frankenstein/api run build",
+    "build:web": "pnpm --filter @frankenstein/web build",
+    "build:all": "pnpm run build && pnpm run build:platform && pnpm run build:web",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "setup": "tsx scripts/setup.ts"
+    "dev:api": "pnpm --filter @frankenstein/api dev",
+    "dev:web": "pnpm --filter @frankenstein/web dev",
+    "start:api": "pnpm --filter @frankenstein/api start",
+    "start:web": "pnpm --filter @frankenstein/web start",
+    "test:api": "pnpm --filter @frankenstein/api test",
+    "test:media-worker": "pnpm --filter @frankenstein/media-worker test",
+    "test:web": "pnpm --filter @frankenstein/web test",
+    "test:platform": "pnpm run test:media-worker && pnpm run test:api",
+    "typecheck:platform": "pnpm --filter @frankenstein/shared-types --filter @frankenstein/media-worker --filter @frankenstein/api run typecheck",
+    "typecheck:web": "pnpm --filter @frankenstein/web typecheck",
+    "setup": "tsx scripts/setup.ts",
+    "sample:generate": "ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=duration=5:size=640x360:rate=24 -f lavfi -i sine=frequency=440:duration=5 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest -y media/samples/sample.mp4"
   },
   "keywords": [
     "discord",

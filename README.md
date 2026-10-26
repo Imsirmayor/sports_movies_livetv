@@ -33,6 +33,7 @@
 - [File Reference](#file-reference)
 - [Deployment](#deployment)
 - [Development](#development)
+- [Educational REST API (Phase Two)](#educational-rest-api-phase-two)
 - [Troubleshooting](#troubleshooting)
 - [Known Limitations](#known-limitations)
 - [License](#license)
@@ -587,6 +588,36 @@ ffmpeg -version    # Should show 7.1.x
 
 ---
 
+## Educational REST API (Phase Two)
+
+A parallel private API for **local authorized sample media** and browser-compatible **HLS** playback. It does **not** use the Discord Go Live / NUT pipeline. Discord bot sources under `src/**` are unchanged.
+
+| Command | Description |
+|---------|-------------|
+| `pnpm sample:generate` | Create `media/samples/sample.mp4` with FFmpeg |
+| `pnpm build:platform` | Build shared-types, media-worker, and API |
+| `pnpm dev:api` | Run the API with `tsx` |
+| `pnpm test:platform` | Run media-worker + API automated tests |
+
+Set `API_TOKEN` and optionally `MEDIA_ROOT` in `.env` (see `.env.example`). Full contracts and curl examples: [`docs/api.md`](docs/api.md). Architecture notes: [`docs/architecture.md`](docs/architecture.md).
+
+Server-side pause/resume/seek endpoints are **not** implemented in Phase Two; once HLS is `ready`, clients seek/pause locally.
+
+## Web UI (Phase Three)
+
+Next.js app in `apps/web` branded **Bowa** (bow-tie logo, dark Cinemos-style shell). The browser talks only to the Next BFF at `/api/backend/*`; `API_TOKEN` stays on the server.
+
+| Command | Description |
+|---------|-------------|
+| `pnpm dev:web` | Next.js dev server (`http://127.0.0.1:3000`) |
+| `pnpm build:web` | Production web build |
+| `pnpm start:web` | Serve production web build |
+| `pnpm test:web` | Web unit tests |
+
+Also set `API_BASE_URL=http://127.0.0.1:8787` in `.env`. Details: [`docs/web.md`](docs/web.md).
+
+---
+
 ## Development
 
 ### Scripts
@@ -594,8 +625,9 @@ ffmpeg -version    # Should show 7.1.x
 | Command | Description |
 |---------|-------------|
 | `pnpm dev` | Run TypeScript directly via `tsx` (development) |
-| `pnpm build` | Compile TypeScript to `dist/` |
+| `pnpm build` | Compile TypeScript to `dist/` (Discord bot) |
 | `pnpm start` | Run compiled JavaScript (production) |
+| `pnpm build:all` | Build Discord bot + platform packages |
 
 ### Type Checking
 

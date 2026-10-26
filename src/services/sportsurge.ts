@@ -1,13 +1,15 @@
 /**
- * Sportsurge client — fetches live sports events and resolves stream URLs.
- * Ported from WrappedStream's SportsurgeClient.ts with adaptations for our architecture.
+ * Sportsurge / StreamEast client — fetches live sports events and resolves stream URLs.
+ * Adapted for https://streameast.cool event pages of the form:
+ *   https://streameast.cool/{league}/{slug}/{id}
+ * e.g. https://streameast.cool/laliga/real-madrid-fc-barcelona/46919168
  */
 
 import { createLogger } from "../utils/logger.js";
 
 const log = createLogger("Sportsurge");
 
-const BASE_URL = "https://sportsurge.ws";
+const BASE_URL = "https://streameast.cool";
 const EMBED_HOST = "https://gooz.aapmains.net";
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -28,36 +30,41 @@ export interface ResolvedLiveStream {
 }
 
 /**
- * Fetch all events currently listed on sportsurge.ws.
+ * Regex for event links on streameast.cool.
+ * Matches: href="https://streameast.cool/{league}/{slug}/{id}"
+ * Example: href="https://streameast.cool/laliga/real-madrid-fc-barcelona/46919168"
+ */
+const EVENT_LINK_REGEX =
+  /href="https:\/\/streameast\.cool\/([^/"#?]+)\/([^/"#?]+)\/(\d+)"/g;
+
+/**
+ * Fetch all events currently listed on streameast.cool.
  * Parses event links from the server-rendered HTML.
  */
 export async function fetchEvents(): Promise<SportsurgeEvent[]> {
   const html = await fetchText(BASE_URL);
 
-  // Links follow: /watch/{sport}/{team1-team2}/{id}
-  const linkRegex =
-    /href="https:\/\/sportsurge\.ws\/watch\/([^/]+)\/([^/]+)\/(\d+)"/g;
-
   const events: SportsurgeEvent[] = [];
   const seen = new Set<string>();
 
-  for (const match of html.matchAll(linkRegex)) {
-    const sport = match[1]!;
+  for (const match of html.matchAll(EVENT_LINK_REGEX)) {
+    const league = match[1]!;
     const slug = match[2]!;
     const id = match[3]!;
-    const url = `${BASE_URL}/watch/${sport}/${slug}/${id}`;
 
     if (seen.has(id)) continue;
     seen.add(id);
 
+    const url = `${BASE_URL}/${league}/${slug}/${id}`;
+
     // Convert slug to human-readable title:
-    // "golden-state-warriors-new-york-knicks" → "Golden State Warriors New York Knicks"
+    // "real-madrid-fc-barcelona" → "Real Madrid Fc Barcelona"
     const title = slug
       .split("-")
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
       .join(" ");
 
-    events.push({ url, title, sport });
+    events.push({ url, title, sport: league });
   }
 
   log.info(`Fetched ${events.length} live events`);
@@ -65,12 +72,38 @@ export async function fetchEvents(): Promise<SportsurgeEvent[]> {
 }
 
 /**
+ * Parse a single event URL of the form
+ *   https://streameast.cool/{league}/{slug}/{id}
+ * into its parts. Useful when you already know the event URL
+ * (e.g. https://streameast.cool/laliga/real-madrid-fc-barcelona/46919168).
+ */
+export function parseEventUrl(eventUrl: string): {
+  league: string;
+  slug: string;
+  id: string;
+} {
+  const m = eventUrl.match(
+    /^https:\/\/streameast\.cool\/([^/"#?]+)\/([^/"#?]+)\/(\d+)\/?$/
+  );
+  if (!m) {
+    throw new Error(`Invalid streameast event URL: ${eventUrl}`);
+  }
+  return { league: m[1]!, slug: m[2]!, id: m[3]! };
+}
+
+/**
  * Fetch an event page and extract the internal stream embed ID.
  * Returns the numeric stream ID from the gooz.aapmains.net embed URL.
+ *
+ * Works for any event URL, including:
+ *   https://streameast.cool/laliga/real-madrid-fc-barcelona/46919168
  */
 export async function fetchStreamEmbedId(
   eventUrl: string
 ): Promise<string> {
+  // Validate/normalize the URL shape up front.
+  parseEventUrl(eventUrl);
+
   const html = await fetchText(eventUrl);
 
   const match = html.match(
@@ -84,6 +117,28 @@ export async function fetchStreamEmbedId(
 
   log.info(`Found embed ID: ${match[1]}`);
   return match[1];
+}
+
+/**
+ * Convenience: given a single event URL, resolve directly to a stream URL.
+ * Example:
+ *   resolveStreamForEvent(
+ *     "https://streameast.cool/laliga/real-madrid-fc-barcelona/46919168"
+ *   )
+ */
+export async function resolveStreamForEvent(
+  eventUrl: string
+): Promise<ResolvedLiveStream> {
+  const { league, slug, id } = parseEventUrl(eventUrl);
+  const streamId = await fetchStreamEmbedId(eventUrl);
+  const { streamUrl, headers } = await resolveStreamUrl(streamId);
+
+  const eventTitle = slug
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+
+  return { eventTitle, sport: league, streamUrl, headers };
 }
 
 /**
@@ -104,7 +159,9 @@ export async function resolveStreamUrl(
     Referer: `${BASE_URL}/`,
   });
 
-  const match = html.match(/https?:\/\/[^\s'"]+\/playlist\/\d+\/load-playlist/);
+  const match = html.match(
+    /https?:\/\/[^\s'"]+\/playlist\/\d+\/load-playlist/
+  );
   if (!match?.[0]) {
     throw new Error(
       `No playlist URL found in embed page for stream ${streamId}`

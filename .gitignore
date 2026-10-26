@@ -12,3 +12,15 @@ test_input.ts
 test_stream.ts
 test_timing.ts
 .command-hash
+
+# Phase Two media workspace
+.media-work/
+.media-cache/
+media/samples/*
+!media/samples/.gitkeep
+
+# Package build outputs (workspace packages)
+packages/*/dist/
+services/*/dist/
+apps/web/.next/
+apps/web/out/
