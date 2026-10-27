@@ -19,6 +19,15 @@ function safeKeyPart(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120);
 }
 
+async function playlistIsComplete(dir: string): Promise<boolean> {
+  try {
+    const raw = await readFile(join(dir, "index.m3u8"), "utf8");
+    return raw.includes("#EXT-X-ENDLIST");
+  } catch {
+    return false;
+  }
+}
+
 /** Bump when remux codec profile changes so stale silent caches are not reused. */
 const CACHE_PROFILE = "a2";
 
@@ -62,22 +71,24 @@ export class StreamCache {
   }
 
   async has(key: string): Promise<boolean> {
+    const dir = this.dirFor(key);
     try {
-      await access(join(this.dirFor(key), "index.m3u8"));
-      return true;
+      await access(join(dir, "index.m3u8"));
     } catch {
       return false;
     }
+    // Incomplete EVENT remuxes (no ENDLIST) used to be cached and replayed as
+    // "full" movies that stall mid-title — refuse them as cache hits.
+    if (!(await playlistIsComplete(dir))) {
+      log.warn(`Ignoring incomplete HLS cache (no ENDLIST) key=${key}`);
+      return false;
+    }
+    return true;
   }
 
   async getPlaylistPath(key: string): Promise<string | null> {
-    const playlist = join(this.dirFor(key), "index.m3u8");
-    try {
-      await access(playlist);
-      return playlist;
-    } catch {
-      return null;
-    }
+    if (!(await this.has(key))) return null;
+    return join(this.dirFor(key), "index.m3u8");
   }
 
   /** Copy a finished remux directory into the cache (best-effort LRU trim). */
@@ -85,6 +96,10 @@ export class StreamCache {
     const dest = this.dirFor(key);
     const tmp = `${dest}.tmp-${Date.now()}`;
     try {
+      if (!(await playlistIsComplete(sourceDir))) {
+        log.warn(`Refusing to cache incomplete remux (no ENDLIST) key=${key}`);
+        return;
+      }
       await rm(tmp, { recursive: true, force: true });
       await cp(sourceDir, tmp, { recursive: true });
       const names = await readdir(tmp);
@@ -94,9 +109,15 @@ export class StreamCache {
         log.warn(`Refusing to cache empty remux key=${key}`);
         return;
       }
+      // Always keep a local copy first. R2 is best-effort CDN mirror.
       let r2PlaylistUrl: string | null = null;
       if (this.r2) {
         r2PlaylistUrl = await this.r2.uploadDir(key, tmp);
+        if (!r2PlaylistUrl) {
+          log.warn(
+            `R2 upload unavailable for key=${key} — serving from local .media-cache only`
+          );
+        }
       }
       const meta: StreamCacheMeta = {
         key,
@@ -112,7 +133,8 @@ export class StreamCache {
       await cp(tmp, dest, { recursive: true });
       await rm(tmp, { recursive: true, force: true });
       log.info(
-        `Cached HLS key=${key} segments=${segments}${r2PlaylistUrl ? " (+R2)" : ""}`
+        `Cached HLS key=${key} segments=${segments}` +
+          (r2PlaylistUrl ? " (+R2 CDN)" : " (local only)")
       );
       await this.trim();
     } catch (err) {
@@ -121,13 +143,22 @@ export class StreamCache {
     }
   }
 
+  /**
+   * Public CDN playlist when R2 has the object.
+   * Returns null when R2 is off / missing so callers fall back to local cache.
+   */
   async getR2PlaylistUrl(key: string): Promise<string | null> {
-    const meta = await this.readMeta(key);
-    if (meta?.r2PlaylistUrl) return meta.r2PlaylistUrl;
-    if (this.r2 && (await this.r2.hasObject(key))) {
-      return this.r2.publicPlaylistUrl(key);
+    if (this.r2) {
+      if (await this.r2.hasObject(key)) {
+        return this.r2.publicPlaylistUrl(key);
+      }
+      // Object gone from bucket — ignore stale meta and use local disk instead.
+      return null;
     }
-    return null;
+    // No R2 client configured: still honour a previously uploaded public URL
+    // (playback does not need S3 credentials).
+    const meta = await this.readMeta(key);
+    return meta?.r2PlaylistUrl ?? null;
   }
 
   private async trim(): Promise<void> {

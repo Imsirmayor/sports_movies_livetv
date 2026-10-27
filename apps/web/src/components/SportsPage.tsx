@@ -1,277 +1,469 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import type {
-  SportCompetition,
-  SportEvent,
-  SportEventStatus,
-  SportsListResponse,
-} from "@frankenstein/shared-types";
+import type { CatalogTitle, SportEvent, SportEventStatus } from "@frankenstein/shared-types";
 import { SiteShell } from "./SiteShell";
-import { EventCard } from "./EventCard";
-import { SkeletonGrid, StateBlock } from "./StateBlock";
+import { StateBlock } from "./StateBlock";
 import { apiClient } from "@/lib/api-client";
 import { isApiClientError } from "@/lib/api-error";
+import { listContinueWatch, formatResumeLabel } from "@/lib/continue-watching";
+import { MatchCountdown } from "./MatchCountdown";
+import {
+  eventScoreLabel,
+  eventSubtitle,
+  formatEventTitle,
+  teamAbbr,
+} from "@/lib/sports-ui";
 
-const STATUSES: Array<SportEventStatus | ""> = ["", "live", "upcoming", "finished", "unknown"];
-
-type LeagueGroup = {
-  key: string;
-  name: string;
-  sport: string;
-  events: SportEvent[];
-};
-
-function groupByCompetition(
-  events: SportEvent[],
-  competitions: SportCompetition[]
-): LeagueGroup[] {
-  const order = new Map(competitions.map((c, i) => [c.id, i]));
-  const byId = new Map<string, LeagueGroup>();
-
-  for (const event of events) {
-    const key = event.competitionId || event.competition || "other";
-    const known = competitions.find((c) => c.id === key || c.name === event.competition);
-    let group = byId.get(key);
-    if (!group) {
-      group = {
-        key,
-        name: known?.name ?? event.competition,
-        sport: known?.sport ?? event.sport,
-        events: [],
-      };
-      byId.set(key, group);
-    }
-    group.events.push(event);
-  }
-
-  return [...byId.values()].sort((a, b) => {
-    const ai = order.get(a.key) ?? 999;
-    const bi = order.get(b.key) ?? 999;
-    if (ai !== bi) return ai - bi;
-    return a.name.localeCompare(b.name);
-  });
-}
+type FeedFilter = "all" | "live" | "upcoming" | "sport";
 
 export function SportsPage() {
   const router = useRouter();
   const params = useSearchParams();
-  const [catalog, setCatalog] = useState<SportsListResponse | null>(null);
   const [events, setEvents] = useState<SportEvent[]>([]);
-  const [ambiguous, setAmbiguous] = useState(false);
+  const [movies, setMovies] = useState<CatalogTitle[]>([]);
+  const [continueWatching, setContinueWatching] = useState(() =>
+    typeof window !== "undefined" ? listContinueWatch(4) : []
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [feed, setFeed] = useState<FeedFilter>("all");
+  const [sportChip, setSportChip] = useState("");
 
-  const filters = useMemo(
-    () => ({
-      q: params.get("q") ?? "",
-      team: params.get("team") ?? "",
-      sport: params.get("sport") ?? "",
-      competition: params.get("competition") ?? "",
-      status: (params.get("status") as SportEventStatus | null) ?? "",
-    }),
-    [params]
-  );
-
-  const leagues = useMemo(
-    () => groupByCompetition(events, catalog?.competitions ?? []),
-    [events, catalog]
-  );
+  const statusParam = (params.get("status") as SportEventStatus | null) ?? "";
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadCatalog() {
-      try {
-        const c = await apiClient.listSports();
-        if (!cancelled) setCatalog(c);
-      } catch {
-        /* list can fail independently; events will show error */
-      }
-    }
-    void loadCatalog();
-    return () => {
-      cancelled = true;
-    };
+    setContinueWatching(listContinueWatch(4));
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    async function loadEvents() {
-      setLoading(true);
+    let first = true;
+    async function load(soft = false) {
+      if (!soft) setLoading(true);
       try {
         const status =
-          filters.status === "live" ||
-          filters.status === "upcoming" ||
-          filters.status === "finished" ||
-          filters.status === "unknown"
-            ? filters.status
+          statusParam === "live" ||
+          statusParam === "upcoming" ||
+          statusParam === "finished"
+            ? statusParam
             : undefined;
-        const res = await apiClient.searchSportsEvents({
-          q: filters.q || undefined,
-          team: filters.team || undefined,
-          sport: filters.sport || undefined,
-          competition: filters.competition || undefined,
-          status,
-        });
-        if (!cancelled) {
-          setEvents(res.events);
-          setAmbiguous(Boolean(res.ambiguous));
-          setError(null);
-        }
+        const [sportsRes, catalogRes] = await Promise.all([
+          apiClient.searchSportsEvents({
+            q: params.get("q") || undefined,
+            team: params.get("team") || undefined,
+            sport: params.get("sport") || undefined,
+            competition: params.get("competition") || undefined,
+            status,
+          }),
+          first
+            ? apiClient.listCatalogMovies().catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        setEvents(sportsRes.events);
+        if (catalogRes) setMovies(catalogRes.items?.slice(0, 6) ?? []);
+        setError(null);
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !soft) {
           setEvents([]);
-          setAmbiguous(false);
-          setError(isApiClientError(err) ? err.message : "Failed to load events");
+          setError(isApiClientError(err) ? err.message : "Failed to load sports");
         }
       } finally {
+        first = false;
         if (!cancelled) setLoading(false);
       }
     }
-    void loadEvents();
+    void load(false);
+    // Keep listings fresh — API cache is ~8s; poll a bit above that.
+    const id = window.setInterval(() => void load(true), 12_000);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
-  }, [filters]);
+  }, [params, statusParam]);
 
-  function updateQuery(patch: Record<string, string>) {
+  const sports = useMemo(
+    () => [...new Set(events.map((e) => e.sport).filter(Boolean))].sort(),
+    [events]
+  );
+
+  const live = useMemo(
+    () => events.filter((e) => e.status === "live"),
+    [events]
+  );
+  const upcoming = useMemo(
+    () => events.filter((e) => e.status === "upcoming"),
+    [events]
+  );
+
+  const filteredLive = useMemo(() => {
+    let list = live;
+    if (sportChip) list = list.filter((e) => e.sport === sportChip);
+    return list;
+  }, [live, sportChip]);
+
+  const hero = live[0] ?? upcoming[0] ?? events[0] ?? null;
+
+  const schedule =
+    upcoming.length > 0
+      ? upcoming
+      : events.filter((e) => e.status !== "live" && e.id !== hero?.id).slice(0, 8);
+
+  function setStatusFilter(status: string) {
     const next = new URLSearchParams(params.toString());
-    for (const [k, v] of Object.entries(patch)) {
-      if (!v) next.delete(k);
-      else next.set(k, v);
-    }
+    if (!status) next.delete("status");
+    else next.set("status", status);
     const qs = next.toString();
     router.replace(qs ? `/sports?${qs}` : "/sports");
   }
 
-  function selectLeague(name: string) {
-    updateQuery({ competition: name === filters.competition ? "" : name });
-  }
-
   return (
-    <SiteShell searchHref="/sports" searchPlaceholder="Search teams or events">
-      <div className="page-hero">
-        <h1>Live sports</h1>
-        <p>
-          Matches grouped by league from the configured provider
-          {catalog ? ` (${catalog.provider})` : ""}. Live video needs an authorized stream source —
-          Sportsurge is offline, so fixture events are schedule-only (no local-file stand-in).
-        </p>
-      </div>
+    <SiteShell
+      flush
+      pulseFooter
+      searchHref="/sports"
+      searchPlaceholder="Search matches, shows, stadiums"
+    >
+      {/* Hero — featured match */}
+      {hero ? (
+        <section className="pulse-hero" aria-label="Featured match">
+          <div className="pulse-hero-bg" aria-hidden />
+          <div className="pulse-hero-inner">
+            <div className="pulse-hero-badges">
+              {hero.status === "live" ? (
+                <span className="pulse-badge pulse-badge--live">LIVE NOW</span>
+              ) : (
+                <span className="pulse-badge">{hero.status.toUpperCase()}</span>
+              )}
+              <span className="pulse-badge pulse-badge--ghost">
+                {hero.competition.toUpperCase()}
+              </span>
+              <span className="pulse-badge pulse-badge--ghost">HD STREAM</span>
+              <span className="pulse-badge pulse-badge--ghost">MULTI-CAM READY</span>
+            </div>
+            <p className="pulse-hero-kicker">{eventSubtitle(hero)}</p>
+            <h1 className="pulse-hero-title">{formatEventTitle(hero)}</h1>
+            <p className="pulse-hero-desc">
+              {hero.status === "live"
+                ? "Authorized broadcast feed remuxed for in-app playback. Jump in for the live stream."
+                : "Set a reminder from the schedule below, or open the event page for stream status."}
+            </p>
+            {eventScoreLabel(hero) ? (
+              <div className="pulse-scoreboard">
+                <strong>{eventScoreLabel(hero)}</strong>
+                <span className="pulse-scoreboard-meta">
+                  <span className="pulse-live-dot" />
+                  <MatchCountdown startTime={hero.startTime} status={hero.status} />
+                </span>
+              </div>
+            ) : (
+              <div className="pulse-scoreboard">
+                <strong>
+                  {teamAbbr(hero.homeTeam)} vs {teamAbbr(hero.awayTeam)}
+                </strong>
+                <span className="pulse-scoreboard-meta">
+                  <MatchCountdown startTime={hero.startTime} status={hero.status} />
+                </span>
+              </div>
+            )}
+            <div className="pulse-hero-actions">
+              {hero.status === "live" &&
+              (hero.streamAvailability === "available" ||
+                hero.streamAvailability === "fixture") ? (
+                <Link
+                  href={`/sports/${encodeURIComponent(hero.id)}`}
+                  className="accent-btn pulse-cta"
+                >
+                  ▶ Watch Live Stream
+                </Link>
+              ) : (
+                <button type="button" className="accent-btn pulse-cta" disabled>
+                  <MatchCountdown startTime={hero.startTime} status={hero.status} />
+                </button>
+              )}
+              <button type="button" className="ghost-btn pulse-cta-ghost">
+                + Add to My List
+              </button>
+              <Link
+                href={`/sports/${encodeURIComponent(hero.id)}`}
+                className="ghost-btn pulse-cta-ghost"
+              >
+                Tactical Lineups &amp; Stats
+              </Link>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
-      {catalog && catalog.competitions.length > 0 ? (
-        <div className="league-chips" role="navigation" aria-label="Leagues">
+      <div className="pulse-content">
+        {/* Filter chips */}
+        <div className="pulse-filter-bar" role="navigation" aria-label="Sports filters">
           <button
             type="button"
-            className={`league-chip${!filters.competition ? " is-active" : ""}`}
-            onClick={() => updateQuery({ competition: "" })}
+            className={`pulse-chip${feed === "all" && !statusParam ? " is-active" : ""}`}
+            onClick={() => {
+              setFeed("all");
+              setStatusFilter("");
+            }}
           >
-            All leagues
+            All Streams
           </button>
-          {catalog.competitions.map((c) => (
+          <button
+            type="button"
+            className={`pulse-chip${statusParam === "live" || feed === "live" ? " is-active" : ""}`}
+            onClick={() => {
+              setFeed("live");
+              setStatusFilter("live");
+            }}
+          >
+            Live Sports
+            {live.length > 0 ? ` (${live.length} on air)` : ""}
+          </button>
+          <button
+            type="button"
+            className={`pulse-chip${statusParam === "upcoming" ? " is-active" : ""}`}
+            onClick={() => {
+              setFeed("upcoming");
+              setStatusFilter("upcoming");
+            }}
+          >
+            Featured Matches
+          </button>
+          <Link href="/series" className="pulse-chip">
+            Trending Series
+          </Link>
+          <Link href="/movies" className="pulse-chip">
+            Pulse Originals &amp; Docs
+          </Link>
+          {sports.slice(0, 4).map((s) => (
             <button
-              key={c.id}
+              key={s}
               type="button"
-              className={`league-chip${filters.competition === c.name ? " is-active" : ""}`}
-              onClick={() => selectLeague(c.name)}
+              className={`pulse-chip${sportChip === s ? " is-active" : ""}`}
+              onClick={() => setSportChip(sportChip === s ? "" : s)}
             >
-              {c.name}
+              {s}
             </button>
           ))}
         </div>
-      ) : null}
 
-      <form
-        className="filter-bar"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const fd = new FormData(e.currentTarget);
-          updateQuery({
-            q: String(fd.get("q") || ""),
-            team: String(fd.get("team") || ""),
-            sport: String(fd.get("sport") || ""),
-            competition: String(fd.get("competition") || ""),
-            status: String(fd.get("status") || ""),
-          });
-        }}
-      >
-        <label>
-          Search
-          <input name="q" defaultValue={filters.q} placeholder="Event or team" />
-        </label>
-        <label>
-          Team
-          <input name="team" defaultValue={filters.team} placeholder="e.g. Arsenal" />
-        </label>
-        <label>
-          Sport
-          <select name="sport" defaultValue={filters.sport}>
-            <option value="">All</option>
-            {(catalog?.sports ?? []).map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Competition
-          <select name="competition" defaultValue={filters.competition}>
-            <option value="">All</option>
-            {(catalog?.competitions ?? []).map((c) => (
-              <option key={c.id} value={c.name}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Status
-          <select name="status" defaultValue={filters.status}>
-            {STATUSES.map((s) => (
-              <option key={s || "all"} value={s}>
-                {s || "All"}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" className="accent-btn">
-          Apply
-        </button>
-      </form>
+        {loading ? (
+          <StateBlock title="Loading sports…" message="Fetching live and upcoming feeds." />
+        ) : null}
+        {error ? (
+          <StateBlock tone="error" title="Could not load events" message={error} />
+        ) : null}
+        {!loading && !error && events.length === 0 ? (
+          <StateBlock
+            title="No events"
+            message="Check back during game time or clear status filters."
+          />
+        ) : null}
 
-      {ambiguous ? (
-        <StateBlock
-          tone="warn"
-          title="Ambiguous team match"
-          message="Multiple strong matches were returned. Choose an event explicitly — nothing was auto-selected."
-        />
-      ) : null}
+        {/* Live Sports On Air */}
+        {filteredLive.length > 0 ? (
+          <section className="pulse-section">
+            <div className="pulse-section-head">
+              <h2>
+                <span className="pulse-live-dot" /> Live Sports On Air
+              </h2>
+              <span className="muted">{filteredLive.length} active feeds</span>
+            </div>
+            <div className="pulse-live-grid">
+              {filteredLive.slice(0, 6).map((event) => (
+                <article key={event.id} className="pulse-live-card">
+                  <div className="pulse-live-card-media">
+                    <span className="pulse-badge pulse-badge--live">LIVE</span>
+                    <span className="pulse-badge pulse-badge--ghost">HD</span>
+                  </div>
+                  <div className="pulse-live-card-body">
+                    <p className="pulse-live-card-league">
+                      {event.competition.toUpperCase()}
+                    </p>
+                    <h3>{formatEventTitle(event)}</h3>
+                    <p className="pulse-live-card-score">
+                      {eventScoreLabel(event) ??
+                        `${teamAbbr(event.homeTeam)} vs ${teamAbbr(event.awayTeam)}`}
+                    </p>
+                    {event.status === "live" ? (
+                      <Link
+                        href={`/sports/${encodeURIComponent(event.id)}`}
+                        className="accent-btn"
+                      >
+                        Jump In
+                      </Link>
+                    ) : (
+                      <p className="pulse-live-card-countdown">
+                        <MatchCountdown
+                          startTime={event.startTime}
+                          status={event.status}
+                        />
+                      </p>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
-      {loading ? <SkeletonGrid count={6} /> : null}
-      {error ? <StateBlock tone="error" title="Could not load events" message={error} /> : null}
-      {!loading && !error && events.length === 0 ? (
-        <StateBlock title="No events" message="Try clearing filters or searching another team." />
-      ) : null}
-      {!loading && leagues.length > 0
-        ? leagues.map((league) => (
-            <section key={league.key} className="content-section league-section">
-              <div className="section-head">
-                <h2>
-                  {league.name}
-                  <span className="league-sport">{league.sport}</span>
-                </h2>
-                <span className="muted">{league.events.length} matches</span>
-              </div>
-              <div className="card-grid">
-                {league.events.map((e) => (
-                  <EventCard key={e.id} event={e} hideCompetition />
+        {/* Continue Watching */}
+        {continueWatching.length > 0 ? (
+          <section className="pulse-section">
+            <div className="pulse-section-head">
+              <h2>Continue Watching</h2>
+              <span className="muted">{continueWatching.length} in progress</span>
+            </div>
+            <div className="pulse-continue-row">
+              {continueWatching.map((entry) => {
+                const pct =
+                  entry.duration > 0
+                    ? Math.min(100, Math.round((entry.position / entry.duration) * 100))
+                    : 12;
+                const left =
+                  entry.duration > 0
+                    ? Math.max(0, Math.round((entry.duration - entry.position) / 60))
+                    : null;
+                return (
+                  <Link key={entry.id} href={entry.href} className="pulse-continue-card">
+                    <div className="pulse-continue-thumb">
+                      <span className="pulse-continue-play">▶</span>
+                      <div className="pulse-continue-progress">
+                        <span style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                    <strong>{entry.title}</strong>
+                    <span className="muted">
+                      {left != null
+                        ? `${left}m remaining`
+                        : `At ${formatResumeLabel(entry.position)}`}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+
+        {/* Trending + Schedule */}
+        <div className="pulse-split">
+          <section className="pulse-section">
+            <div className="pulse-section-head">
+              <h2>Top Trending Now</h2>
+              <Link href="/movies" className="pulse-link">
+                Explore
+              </Link>
+            </div>
+            {movies.length === 0 ? (
+              <p className="muted">Catalog titles appear here when the addon is configured.</p>
+            ) : (
+              <div className="pulse-poster-row">
+                {movies.slice(0, 3).map((m, i) => (
+                  <Link
+                    key={m.id}
+                    href={`/movies/catalog/${encodeURIComponent(m.id)}`}
+                    className="pulse-poster-card"
+                  >
+                    {m.poster ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={m.poster} alt="" />
+                    ) : (
+                      <div className="pulse-poster-fallback">{m.name.slice(0, 1)}</div>
+                    )}
+                    {i === 0 ? <span className="pulse-poster-rank">TOP 1</span> : null}
+                    <div className="pulse-poster-meta">
+                      <strong>{m.name}</strong>
+                      <span className="muted">{m.year ?? "Movie"}</span>
+                    </div>
+                  </Link>
                 ))}
               </div>
-            </section>
-          ))
-        : null}
+            )}
+            <div className="pulse-promo">
+              <div>
+                <h3>Spatial Theater Hub</h3>
+                <p className="muted">Configure multi-cam and spatial audio for live arenas.</p>
+              </div>
+              <button type="button" className="ghost-btn">
+                Configure
+              </button>
+            </div>
+          </section>
+
+          <section className="pulse-section pulse-schedule">
+            <div className="pulse-section-head">
+              <h2>Broadcast Schedule</h2>
+              <span className="muted">UTC timing</span>
+            </div>
+            <ul className="pulse-schedule-list">
+              {schedule.slice(0, 8).map((event) => (
+                <li key={event.id}>
+                  <div>
+                    <span className="pulse-schedule-when">
+                      <MatchCountdown
+                        startTime={event.startTime}
+                        status={event.status}
+                      />
+                    </span>
+                    <strong>{formatEventTitle(event)}</strong>
+                    <span className="muted">{event.competition}</span>
+                  </div>
+                  {event.status === "live" ? (
+                    <Link
+                      href={`/sports/${encodeURIComponent(event.id)}`}
+                      className="ghost-btn"
+                    >
+                      Watch
+                    </Link>
+                  ) : (
+                    <span className="ghost-btn" aria-disabled>
+                      Waiting
+                    </span>
+                  )}
+                </li>
+              ))}
+              {schedule.length === 0 ? (
+                <li className="muted">No upcoming matchups in this feed.</li>
+              ) : null}
+            </ul>
+          </section>
+        </div>
+
+        {/* Full league-style grid for remaining */}
+        {events.length > 0 ? (
+          <section className="pulse-section">
+            <div className="pulse-section-head">
+              <h2>All Matchups</h2>
+              <span className="muted">{events.length} events</span>
+            </div>
+            <div className="pulse-match-grid">
+              {events.slice(0, 24).map((event) => (
+                <Link
+                  key={event.id}
+                  href={`/sports/${encodeURIComponent(event.id)}`}
+                  className="pulse-match-row"
+                >
+                  <span
+                    className={`pulse-badge${event.status === "live" ? " pulse-badge--live" : " pulse-badge--ghost"}`}
+                  >
+                    {event.status.toUpperCase()}
+                  </span>
+                  <div>
+                    <strong>{formatEventTitle(event)}</strong>
+                    <span className="muted">
+                      {event.competition} · {event.sport}
+                    </span>
+                  </div>
+                  <span className="pulse-match-cta">Open →</span>
+                </Link>
+              ))}
+            </div>
+          </section>
+        ) : null}
+      </div>
     </SiteShell>
   );
 }

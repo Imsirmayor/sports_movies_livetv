@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import {
+  IconCinema,
   IconForward,
   IconFullscreen,
   IconPause,
@@ -86,9 +87,38 @@ export function HlsPlayer({
   const [bufferedEnd, setBufferedEnd] = useState(0);
   const [volume, setVolume] = useState(1);
   const [subLang, setSubLang] = useState<string>(initialSubtitleLang || "off");
+  const [cinemaMode, setCinemaMode] = useState(false);
 
   startAtRef.current = startAtSeconds;
   onProgressRef.current = onProgress;
+
+  const notifyCinemaMode = (active: boolean) => {
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(
+          { type: "frankenstein:cinema-mode", active },
+          window.location.origin
+        );
+      }
+    } catch {
+      /* ignore cross-origin */
+    }
+  };
+
+  const setCinema = (active: boolean) => {
+    setCinemaMode(active);
+    notifyCinemaMode(active);
+  };
+
+  useEffect(() => {
+    if (!cinemaMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCinema(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setCinema is stable enough for Escape exit
+  }, [cinemaMode]);
 
   useEffect(() => {
     if (initialSubtitleLang) setSubLang(initialSubtitleLang);
@@ -160,9 +190,18 @@ export function HlsPlayer({
     };
 
     if (Hls.isSupported()) {
+      let networkRetries = 0;
+      let mediaRetries = 0;
       const hls = new Hls({
         enableWorker: true,
-        liveDurationInfinity: kind === "vod",
+        // Remuxed VOD uses EVENT playlists until ENDLIST; treat infinity only for live.
+        liveDurationInfinity: kind === "live",
+        // Stay closer to the playhead so a slow remux doesn't look like a stall.
+        maxBufferLength: kind === "vod" ? 45 : 24,
+        maxMaxBufferLength: kind === "vod" ? 90 : 48,
+        manifestLoadingMaxRetry: 6,
+        levelLoadingMaxRetry: 6,
+        fragLoadingMaxRetry: 8,
       });
       hlsRef.current = hls;
       hls.loadSource(src);
@@ -173,11 +212,26 @@ export function HlsPlayer({
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return;
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          hls.startLoad();
+          networkRetries += 1;
+          if (networkRetries <= 3) {
+            hls.startLoad();
+            return;
+          }
+          if (networkRetries <= 5) {
+            hls.loadSource(src);
+            hls.startLoad();
+            return;
+          }
+          onNativeError?.(data.details || "Network error loading stream");
           return;
         }
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          hls.recoverMediaError();
+          mediaRetries += 1;
+          if (mediaRetries <= 3) {
+            hls.recoverMediaError();
+            return;
+          }
+          onNativeError?.(data.details || "Media decode error");
           return;
         }
         onNativeError?.(data.details || "HLS playback failed");
@@ -271,6 +325,10 @@ export function HlsPlayer({
     }
   };
 
+  const toggleCinema = () => {
+    setCinema(!cinemaMode);
+  };
+
   const onVolume = (v: number) => {
     setVolume(v);
     if (videoRef.current) {
@@ -283,7 +341,10 @@ export function HlsPlayer({
   const showDuration = Number.isFinite(duration) && duration > 0 ? duration : scrubMax;
 
   return (
-    <div className="player-wrap" ref={wrapRef}>
+    <div
+      className={`player-wrap${cinemaMode ? " player-wrap--cinema" : ""}`}
+      ref={wrapRef}
+    >
       <div className="player-card">
         <video
           ref={videoRef}
@@ -411,10 +472,23 @@ export function HlsPlayer({
         ) : null}
         <button
           type="button"
+          className={cinemaMode ? "accent-btn" : "ghost-btn"}
+          onClick={toggleCinema}
+          disabled={!src}
+          aria-label={cinemaMode ? "Exit cinema mode" : "Cinema mode"}
+          aria-pressed={cinemaMode}
+          title={cinemaMode ? "Exit cinema mode (Esc)" : "Cinema mode"}
+        >
+          <IconCinema />
+          Cinema
+        </button>
+        <button
+          type="button"
           className="ghost-btn"
           onClick={toggleFullscreen}
           disabled={!src}
           aria-label="Fullscreen"
+          title="Fullscreen"
         >
           <IconFullscreen />
         </button>

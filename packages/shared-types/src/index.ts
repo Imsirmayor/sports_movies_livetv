@@ -303,3 +303,91 @@ export const CatalogSeriesStreamsResponseSchema = z.object({
 export type CatalogSeriesStreamsResponse = z.infer<
   typeof CatalogSeriesStreamsResponseSchema
 >;
+
+/* ── Ads / pre-roll monetization ───────────────────────── */
+
+export const AdNetworkSchema = z.enum(["admob", "applovin", "vast", "house"]);
+export type AdNetwork = z.infer<typeof AdNetworkSchema>;
+
+export const AdPlacementSchema = z.enum(["preroll", "banner", "interstitial"]);
+export type AdPlacement = z.infer<typeof AdPlacementSchema>;
+
+export const AdsConfigSchema = z.object({
+  enabled: z.boolean(),
+  prerollEnabled: z.boolean(),
+  skipAfterSec: z.number().int().nonnegative(),
+  networks: z.array(AdNetworkSchema),
+  admob: z
+    .object({
+      androidAppId: z.string().nullable(),
+      iosAppId: z.string().nullable(),
+      interstitialUnitIdAndroid: z.string().nullable(),
+      interstitialUnitIdIos: z.string().nullable(),
+      rewardedUnitIdAndroid: z.string().nullable(),
+      rewardedUnitIdIos: z.string().nullable(),
+      bannerUnitIdAndroid: z.string().nullable(),
+      bannerUnitIdIos: z.string().nullable(),
+    })
+    .nullable(),
+  applovin: z
+    .object({
+      sdkKey: z.string().nullable(),
+      interstitialUnitId: z.string().nullable(),
+      bannerUnitId: z.string().nullable(),
+    })
+    .nullable(),
+  vastTagUrl: z.string().nullable(),
+  house: z
+    .object({
+      title: z.string(),
+      body: z.string(),
+      ctaLabel: z.string(),
+      ctaUrl: z.string().nullable(),
+      imageUrl: z.string().nullable(),
+    })
+    .nullable(),
+});
+export type AdsConfig = z.infer<typeof AdsConfigSchema>;
+
+export const AdsHouseCreativeSchema = z.object({
+  title: z.string(),
+  body: z.string(),
+  ctaLabel: z.string(),
+  ctaUrl: z.string().nullable(),
+  imageUrl: z.string().nullable(),
+});
+export type AdsHouseCreative = z.infer<typeof AdsHouseCreativeSchema>;
+
+export const AdsPrerollRequestSchema = z.object({
+  platform: z.enum(["web", "android", "ios"]),
+  contentType: z.enum(["movie", "series", "sport", "vod"]).optional(),
+  contentId: z.string().max(128).optional(),
+});
+export type AdsPrerollRequest = z.infer<typeof AdsPrerollRequestSchema>;
+
+export const AdsPrerollDecisionSchema = z.object({
+  show: z.boolean(),
+  network: AdNetworkSchema.nullable(),
+  placement: z.literal("preroll"),
+  skipAfterSec: z.number().int().nonnegative(),
+  /** AdMob interstitial unit for mobile. */
+  admobInterstitialUnitId: z.string().nullable(),
+  /** AdMob rewarded unit for mobile preroll (preferred when set). */
+  admobRewardedUnitId: z.string().nullable(),
+  /** AppLovin MAX interstitial unit. */
+  applovinInterstitialUnitId: z.string().nullable(),
+  /** VAST/VMAP tag for web IMA. */
+  vastTagUrl: z.string().nullable(),
+  house: AdsHouseCreativeSchema.nullable(),
+  decisionId: z.string(),
+});
+export type AdsPrerollDecision = z.infer<typeof AdsPrerollDecisionSchema>;
+
+export const AdsEventRequestSchema = z.object({
+  decisionId: z.string().min(1).max(64),
+  event: z.enum(["impression", "start", "skip", "complete", "error", "click"]),
+  network: AdNetworkSchema.optional(),
+  platform: z.enum(["web", "android", "ios"]).optional(),
+  message: z.string().max(500).optional(),
+});
+export type AdsEventRequest = z.infer<typeof AdsEventRequestSchema>;

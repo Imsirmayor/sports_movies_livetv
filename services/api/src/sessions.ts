@@ -215,12 +215,21 @@ export class SessionService {
     });
 
     try {
-      // Prefer Cloudflare R2 CDN playlist when available (no local FFmpeg slot).
+      // 1) Prefer Cloudflare R2 CDN (no VPS bandwidth / FFmpeg).
+      // 2) Fall back to local .media-cache on the server when R2 is off or fails.
       const r2Url = await this.streamCache.getR2PlaylistUrl(cacheKey);
       if (r2Url) {
-        console.info(`[INFO] [Cache] R2 hit catalog=${catalogId} key=${cacheKey}`);
-        const job = await this.jobs.startExternalHlsJob(sessionId, r2Url);
-        return this.toSession(sessionId, this.sessions.get(sessionId)!, job);
+        try {
+          console.info(`[INFO] [Cache] R2 hit catalog=${catalogId} key=${cacheKey}`);
+          const job = await this.jobs.startExternalHlsJob(sessionId, r2Url);
+          return this.toSession(sessionId, this.sessions.get(sessionId)!, job);
+        } catch (err) {
+          console.warn(
+            `[WARN] [Cache] R2 play failed, trying local cache key=${cacheKey}: ${
+              err instanceof Error ? err.message : err
+            }`
+          );
+        }
       }
 
       if (!(await this.streamCache.has(cacheKey))) {
@@ -280,7 +289,9 @@ export class SessionService {
         audioLang,
         onComplete: async (finished, code) => {
           if (!this.streamCache || !cacheKey) return;
-          if (code === 0 || finished.status === "ready") {
+          // Only persist finished remuxes (exit 0 + ENDLIST). Caching early
+          // FFmpeg exits left truncated EVENT playlists that stall mid-movie.
+          if (code === 0) {
             await this.streamCache.save(cacheKey, catalogId, finished.outputDir);
           }
         },

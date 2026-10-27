@@ -7,6 +7,8 @@ import {
   CreateCatalogPlaybackRequestSchema,
   CreateSeriesPlaybackRequestSchema,
   SportEventStatusSchema,
+  AdsPrerollRequestSchema,
+  AdsEventRequestSchema,
   ApiErrorCodes,
 } from "@frankenstein/shared-types";
 import { JobManager, isFfmpegAvailable } from "@frankenstein/media-worker";
@@ -19,6 +21,8 @@ import { StreamCache, movieCacheKey, seriesCacheKey } from "./catalog/stream-cac
 import { CatalogWarmer } from "./catalog/warmer.js";
 import { createR2Client } from "./catalog/r2.js";
 import { downloadSubtitleAsVtt, fetchSubtitles } from "./catalog/opensubtitles.js";
+import { AdsService } from "./ads/service.js";
+import { loadAdsOptionsFromEnv } from "./ads/load-config.js";
 import { createAuthMiddleware } from "./auth.js";
 import { HttpError, sendError } from "./errors.js";
 
@@ -67,21 +71,32 @@ export async function createApp(config: ApiConfig): Promise<AppContext> {
     maxEdgeSessions: config.maxEdgeSessions,
     jobTimeoutMs: config.jobTimeoutMs,
   });
+  // Drop leftover remux folders from previous crashes (can be tens of GB).
+  await jobs.purgeOrphanWorkDirs();
 
   const streamCache = config.streamCacheRoot
     ? new StreamCache(config.streamCacheRoot, config.streamCacheMaxEntries)
     : null;
+  let r2Active = false;
   if (streamCache) {
     await streamCache.init();
     if (config.r2) {
       try {
         const r2 = await createR2Client(config.r2);
         streamCache.setR2Client(r2);
+        r2Active = true;
+        console.info(
+          `[INFO] [R2] CDN enabled bucket=${config.r2.bucket} public=${config.r2.publicBaseUrl}`
+        );
       } catch (err) {
         console.warn(
-          `[WARN] R2 client init failed: ${err instanceof Error ? err.message : err}`
+          `[WARN] R2 client init failed — using local .media-cache only: ${
+            err instanceof Error ? err.message : err
+          }`
         );
       }
+    } else {
+      console.info("[INFO] [Cache] R2 not configured — local .media-cache only");
     }
   }
 
@@ -100,6 +115,7 @@ export async function createApp(config: ApiConfig): Promise<AppContext> {
       })
     : null;
 
+  const ads = new AdsService(loadAdsOptionsFromEnv());
   const requireAuth = createAuthMiddleware(config.apiToken);
 
   const app = express();
@@ -109,6 +125,7 @@ export async function createApp(config: ApiConfig): Promise<AppContext> {
   app.get("/api/health", async (_req, res, next) => {
     try {
       const ffmpegAvailable = await isFfmpegAvailable(config.ffmpegBinary);
+      const adsConfig = ads.getConfig();
       res.json({
         status: "ok",
         service: "frankenstein-api",
@@ -119,12 +136,56 @@ export async function createApp(config: ApiConfig): Promise<AppContext> {
         sportsProvider: sports.getProviderName(),
         catalogConfigured: movies.isConfigured(),
         streamCacheEnabled: Boolean(streamCache),
-        r2Enabled: Boolean(config.r2 && streamCache),
+        r2Enabled: r2Active,
+        /** r2_then_local | local | off */
+        streamDelivery: !streamCache ? "off" : r2Active ? "r2_then_local" : "local",
         maxConcurrentJobs: config.maxConcurrentJobs,
         maxEdgeSessions: config.maxEdgeSessions,
         catalogWarmerEnabled: Boolean(warmer && config.catalogWarmIntervalMs > 0),
         catalogWarmFullRemux: Boolean(streamCache) && config.catalogWarmFullRemux,
+        adsEnabled: adsConfig.enabled,
+        adsPrerollEnabled: adsConfig.prerollEnabled,
       });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── Ads (config + preroll decisioning + event beacons) ───────────────
+  app.get("/api/ads/config", requireAuth, (_req, res) => {
+    res.json(ads.getConfig());
+  });
+
+  app.post("/api/ads/preroll", requireAuth, (req, res, next) => {
+    try {
+      const parsed = AdsPrerollRequestSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        throw new HttpError(
+          400,
+          ApiErrorCodes.VALIDATION_ERROR,
+          "Invalid preroll request",
+          parsed.error.flatten()
+        );
+      }
+      res.json(ads.decidePreroll(parsed.data));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/ads/events", requireAuth, (req, res, next) => {
+    try {
+      const parsed = AdsEventRequestSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        throw new HttpError(
+          400,
+          ApiErrorCodes.VALIDATION_ERROR,
+          "Invalid ad event",
+          parsed.error.flatten()
+        );
+      }
+      ads.trackEvent(parsed.data);
+      res.status(204).end();
     } catch (err) {
       next(err);
     }
@@ -603,7 +664,9 @@ export async function createApp(config: ApiConfig): Promise<AppContext> {
     }
   });
 
-  const HLS_NAME = /^(index\.m3u8|seg_\d{3}\.ts)$/;
+  // FFmpeg uses seg_%03d.ts → after seg_999 comes seg_1000.ts (4+ digits).
+  // Restricting to exactly 3 digits caused movies to die around ~67 minutes.
+  const HLS_NAME = /^(index\.m3u8|seg_\d{3,}\.ts)$/;
   app.get("/api/playback/:sessionId/stream/:name", requireAuth, (req, res, next) => {
     try {
       const sessionId = param(req.params.sessionId);

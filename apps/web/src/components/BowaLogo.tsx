@@ -5,7 +5,7 @@ type Props = {
   showWordmark?: boolean;
 };
 
-/** Bow-tie mark + configurable wordmark */
+/** Pulse Stream equalizer mark + configurable wordmark */
 export function BowaLogo({ size = 28, showWordmark = true }: Props) {
   return (
     <span className="bowa-logo" aria-label={BRAND_NAME}>
@@ -17,22 +17,31 @@ export function BowaLogo({ size = 28, showWordmark = true }: Props) {
         fill="none"
         aria-hidden
       >
-        <rect width="48" height="48" rx="12" fill="url(#bowaGrad)" />
-        <path d="M10 18 L22 24 L10 30 Z" fill="#fff" opacity="0.95" />
-        <path d="M38 18 L26 24 L38 30 Z" fill="#fff" opacity="0.95" />
-        <rect x="20.5" y="20.5" width="7" height="7" rx="2" fill="#1a1a1d" />
-        <rect x="22" y="22" width="4" height="4" rx="1" fill="#fff" opacity="0.85" />
         <defs>
-          <linearGradient id="bowaGrad" x1="8" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#ff7a45" />
-            <stop offset="1" stopColor="#ff4d2e" />
+          <linearGradient id="pulseMarkGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#4A90E2" />
+            <stop offset="100%" stopColor="#7B61FF" />
           </linearGradient>
         </defs>
+        <rect width="48" height="48" rx="12" fill="url(#pulseMarkGrad)" />
+        <g fill="#fff">
+          <rect x="11" y="22" width="4" height="12" rx="2" />
+          <rect x="17.5" y="16" width="4" height="18" rx="2" />
+          <rect x="24" y="12" width="4" height="22" rx="2" />
+          <rect x="30.5" y="18" width="4" height="16" rx="2" />
+          <rect x="37" y="20" width="4" height="14" rx="2" />
+        </g>
       </svg>
       {showWordmark ? (
         <span className="bowa-logo-text">
-          {BRAND_NAME}
-          <span className="bowa-dot">.</span>
+          {BRAND_NAME.includes(" ") ? (
+            <>
+              {BRAND_NAME.split(" ")[0]}{" "}
+              <span className="bowa-dot">{BRAND_NAME.split(" ").slice(1).join(" ")}</span>
+            </>
+          ) : (
+            BRAND_NAME
+          )}
         </span>
       ) : null}
     </span>

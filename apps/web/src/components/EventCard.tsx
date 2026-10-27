@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { SportEvent } from "@frankenstein/shared-types";
-import { formatScore, formatStartTime } from "@/lib/format";
+import { formatEventTitle, formatScore } from "@/lib/format";
+import { MatchCountdown } from "./MatchCountdown";
 
 type Props = {
   event: SportEvent;
@@ -38,20 +39,20 @@ export function EventCard({ event, hideCompetition = false }: Props) {
       <p className="event-meta">
         {hideCompetition ? event.sport : `${event.competition} · ${event.sport}`}
       </p>
-      <h3 className="event-title">
-        {event.homeTeam && event.awayTeam
-          ? `${event.homeTeam} vs ${event.awayTeam}`
-          : event.title}
-      </h3>
+      <h3 className="event-title">{formatEventTitle(event)}</h3>
       <p className="event-sub">
-        {formatStartTime(event.startTime)}
+        <MatchCountdown startTime={event.startTime} status={event.status} />
         {score ? ` · ${score}` : ""}
       </p>
       <Link
         href={`/sports/${encodeURIComponent(event.id)}`}
         className={playable ? "accent-btn" : "ghost-btn"}
       >
-        {playable ? "Open event" : "View details"}
+        {playable
+          ? "Watch live"
+          : event.status === "upcoming"
+            ? "Scheduled"
+            : "View details"}
       </Link>
     </article>
   );

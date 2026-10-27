@@ -29,11 +29,27 @@ describe("StreamCache", () => {
 
     const src = join(root, "src-job");
     await mkdir(src, { recursive: true });
-    await writeFile(join(src, "index.m3u8"), "#EXTM3U\n");
+    await writeFile(
+      join(src, "index.m3u8"),
+      "#EXTM3U\n#EXTINF:4,\nseg_000.ts\n#EXT-X-ENDLIST\n"
+    );
     await writeFile(join(src, "seg_000.ts"), "fake");
 
     await cache.save(key, "tt0111161", src);
     assert.equal(await cache.has(key), true);
     assert.ok(await cache.getPlaylistPath(key));
+  });
+
+  it("refuses incomplete EVENT playlists without ENDLIST", async () => {
+    const cache = new StreamCache(root, 5);
+    await cache.init();
+    const key = movieCacheKey("ttIncomplete", 0);
+    const src = join(root, "src-incomplete");
+    await mkdir(src, { recursive: true });
+    await writeFile(join(src, "index.m3u8"), "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXTINF:4,\nseg_000.ts\n");
+    await writeFile(join(src, "seg_000.ts"), "fake");
+
+    await cache.save(key, "ttIncomplete", src);
+    assert.equal(await cache.has(key), false);
   });
 });

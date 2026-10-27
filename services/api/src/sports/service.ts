@@ -18,11 +18,21 @@ import {
   type SportsurgeRawEvent,
 } from "./sportsurge.js";
 import { HttpError } from "../errors.js";
-import { log } from "node:console";
 
 export type SportsProviderMode = "fixture" | "sportsurge" | "none";
 
-const SPORTSURGE_CACHE_MS = 45_000;
+/**
+ * How long to keep the scraped event listing before re-fetching StreamEast HTML.
+ * Override with SPORTS_EVENTS_CACHE_MS (milliseconds). Default 8s keeps live
+ * pages fresh without hammering the provider on every request.
+ */
+function sportsEventsCacheMs(): number {
+  const raw = process.env.SPORTS_EVENTS_CACHE_MS?.trim();
+  if (!raw) return 8_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 8_000;
+  return Math.floor(n);
+}
 
 export class SportsService {
   private readonly mode: SportsProviderMode;
@@ -51,6 +61,11 @@ export class SportsService {
     this.sportsurgeCache = null;
   }
 
+  private cacheExpired(): boolean {
+    if (!this.sportsurgeCache) return true;
+    return Date.now() - this.sportsurgeCache.at >= sportsEventsCacheMs();
+  }
+
   private async loadEvents(): Promise<{
     sports: string[];
     competitions: SportCompetition[];
@@ -61,11 +76,9 @@ export class SportsService {
     }
 
     if (this.mode === "fixture") {
-      if (
-        this.sportsurgeCache &&
-        Date.now() - this.sportsurgeCache.at >= SPORTSURGE_CACHE_MS
-      ) {
+      if (this.cacheExpired()) {
         this.fixtureCache = null;
+        this.sportsurgeCache = null;
       }
       if (!this.fixtureCache) {
         try {
@@ -90,8 +103,7 @@ export class SportsService {
     }
 
     // sportsurge
-    const now = Date.now();
-    if (this.sportsurgeCache && now - this.sportsurgeCache.at < SPORTSURGE_CACHE_MS) {
+    if (!this.cacheExpired() && this.sportsurgeCache) {
       const events = this.sportsurgeCache.events;
       const sports = [...new Set(events.map((e) => e.sport))].sort();
       const competitions = sports.map((s) => ({
@@ -104,11 +116,8 @@ export class SportsService {
 
     try {
       const raw = (await fetchEvents()).map(toSportsurgeRawEvent);
-
-      console.log("Raw Event :", raw);
-      
       const events = raw.map(toSportEvent);
-      this.sportsurgeCache = { at: now, raw, events };
+      this.sportsurgeCache = { at: Date.now(), raw, events };
       const sports = [...new Set(events.map((e) => e.sport))].sort();
       const competitions = sports.map((s) => ({
         id: `ss-comp-${s}`,

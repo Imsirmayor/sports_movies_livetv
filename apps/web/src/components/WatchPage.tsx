@@ -17,6 +17,8 @@ export function WatchPage({ sessionId }: Props) {
   const imdbId = params.get("imdb");
   const season = Number.parseInt(params.get("season") || "", 10);
   const episode = Number.parseInt(params.get("episode") || "", 10);
+  const nextSeason = Number.parseInt(params.get("nextSeason") || "", 10);
+  const nextEpisode = Number.parseInt(params.get("nextEpisode") || "", 10);
   const sub = params.get("sub");
   const embedded = params.get("embed") === "1";
 
@@ -31,6 +33,8 @@ export function WatchPage({ sessionId }: Props) {
       imdbId={imdbId}
       season={Number.isFinite(season) ? season : null}
       episode={Number.isFinite(episode) ? episode : null}
+      nextSeason={Number.isFinite(nextSeason) ? nextSeason : null}
+      nextEpisode={Number.isFinite(nextEpisode) ? nextEpisode : null}
       initialSubtitleLang={sub}
       embedded={embedded}
     />

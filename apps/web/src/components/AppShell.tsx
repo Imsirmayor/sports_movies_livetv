@@ -17,8 +17,6 @@ import {
   IconUsers,
 } from "./Icons";
 import { BowaLogo } from "./BowaLogo";
-import { HealthBadge } from "./HealthBadge";
-import type { HealthStatus } from "@frankenstein/shared-types";
 
 export type NavId =
   | "home"
@@ -37,9 +35,6 @@ type Props = {
   search: string;
   onSearchChange: (value: string) => void;
   onSearchSubmit: () => void;
-  health: HealthStatus | null;
-  healthLoading: boolean;
-  healthError: string | null;
   activeNav: NavId;
   onNavChange: (id: NavId) => void;
   topTab: "movies" | "tv" | "plans";
@@ -66,9 +61,6 @@ export function AppShell({
   search,
   onSearchChange,
   onSearchSubmit,
-  health,
-  healthLoading,
-  healthError,
   activeNav,
   onNavChange,
   topTab,
@@ -203,7 +195,6 @@ export function AppShell({
         </form>
 
         <div className="top-actions">
-          <HealthBadge health={health} loading={healthLoading} error={healthError} />
           <button type="button" className="icon-btn" aria-label="Notifications" disabled title="Not wired">
             <IconBell />
           </button>

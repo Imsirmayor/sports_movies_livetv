@@ -7,6 +7,7 @@ import { apiClient, CLIENT_API_PREFIX } from "@/lib/api-client";
 import { isApiClientError } from "@/lib/api-error";
 import { saveContinueWatch } from "@/lib/continue-watching";
 import { HlsPlayer, type SubtitleOption } from "./HlsPlayer";
+import { PreRollAd } from "./PreRollAd";
 import { StateBlock } from "./StateBlock";
 
 type Props = {
@@ -20,6 +21,9 @@ type Props = {
   imdbId?: string | null;
   season?: number | null;
   episode?: number | null;
+  /** Following episode to warm while this one plays. */
+  nextSeason?: number | null;
+  nextEpisode?: number | null;
   initialSubtitleLang?: string | null;
   /** Compact player for embedding in a same-origin iframe. */
   embedded?: boolean;
@@ -36,6 +40,8 @@ export function WatchSession({
   imdbId = null,
   season = null,
   episode = null,
+  nextSeason = null,
+  nextEpisode = null,
   initialSubtitleLang = null,
   embedded = false,
 }: Props) {
@@ -45,7 +51,10 @@ export function WatchSession({
   const [playerError, setPlayerError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [subtitleTracks, setSubtitleTracks] = useState<SubtitleOption[]>([]);
+  const [prerollDone, setPrerollDone] = useState(false);
   const stoppedRef = useRef(false);
+  const nextWarmedRef = useRef(false);
+  const midWarmRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -98,6 +107,22 @@ export function WatchSession({
     };
   }, [imdbId, catalogType, season, episode]);
 
+  const warmNextEpisode = useCallback(() => {
+    if (!imdbId || catalogType !== "series") return;
+    if (!nextSeason || !nextEpisode) return;
+    void apiClient
+      .warmCatalogSeries(imdbId, nextSeason, nextEpisode)
+      .catch(() => undefined);
+  }, [imdbId, catalogType, nextSeason, nextEpisode]);
+
+  // Start warming the next episode as soon as this session is ready.
+  useEffect(() => {
+    if (!session || session.status !== "ready") return;
+    if (nextWarmedRef.current) return;
+    nextWarmedRef.current = true;
+    warmNextEpisode();
+  }, [session, warmNextEpisode]);
+
   const persistProgress = useCallback(
     (position: number, duration: number) => {
       if (!progressId) return;
@@ -108,8 +133,17 @@ export function WatchSession({
         duration,
         href: backHref,
       });
+      // Re-warm mid-episode so remux finishes before the credit roll.
+      if (
+        !midWarmRef.current &&
+        duration > 60 &&
+        position / duration >= 0.55
+      ) {
+        midWarmRef.current = true;
+        warmNextEpisode();
+      }
     },
-    [progressId, title, backHref]
+    [progressId, title, backHref, warmNextEpisode]
   );
 
   const stop = useCallback(async () => {
@@ -168,6 +202,24 @@ export function WatchSession({
   const starting = !session || session.status === "starting";
   const kind = session?.kind ?? "vod";
   const capabilities = session?.capabilities ?? { seek: true, pause: true };
+  const contentType =
+    catalogType === "series" || catalogType === "movie"
+      ? catalogType
+      : kind === "live"
+        ? "sport"
+        : "vod";
+
+  if (!prerollDone) {
+    return (
+      <div className={embedded ? "watch-panel watch-panel-embed" : "watch-panel"}>
+        <PreRollAd
+          contentType={contentType}
+          contentId={imdbId ?? sessionId}
+          onDone={() => setPrerollDone(true)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={embedded ? "watch-panel watch-panel-embed" : "watch-panel"}>

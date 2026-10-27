@@ -200,6 +200,16 @@ export function IconFullscreen({ size = 16, ...rest }: IconProps) {
   );
 }
 
+/** Theater / cinema widescreen mode (not OS fullscreen). */
+export function IconCinema({ size = 16, ...rest }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...rest}>
+      <rect x="2" y="6" width="20" height="12" rx="2" />
+      <path d="M7 6V4M12 6V3M17 6V4M7 18v2M12 18v3M17 18v2" />
+    </svg>
+  );
+}
+
 export function IconClose({ size = 16, ...rest }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...rest}>

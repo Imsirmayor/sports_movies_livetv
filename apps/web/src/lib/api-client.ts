@@ -14,6 +14,8 @@ import {
   CatalogSeriesStreamsResponseSchema,
   CatalogSubtitlesResponseSchema,
   SeriesMetaSchema,
+  AdsConfigSchema,
+  AdsPrerollDecisionSchema,
   ApiErrorSchema,
   type HealthStatus,
   type MediaItem,
@@ -29,6 +31,10 @@ import {
   type CatalogSeriesStreamsResponse,
   type CatalogSubtitlesResponse,
   type SeriesMeta,
+  type AdsConfig,
+  type AdsPrerollDecision,
+  type AdsPrerollRequest,
+  type AdsEventRequest,
 } from "@frankenstein/shared-types";
 import { ApiClientError } from "./api-error";
 
@@ -426,6 +432,26 @@ export function createApiClient(options: ApiClientOptions = {}) {
         return `${CLIENT_API_PREFIX}${playlistUrl.slice("/api".length)}`;
       }
       return playlistUrl;
+    },
+
+    getAdsConfig(): Promise<AdsConfig> {
+      return request("/ads/config", { method: "GET" }, (data) => AdsConfigSchema.parse(data));
+    },
+
+    requestPreroll(body: AdsPrerollRequest): Promise<AdsPrerollDecision> {
+      return request(
+        "/ads/preroll",
+        { method: "POST", body: JSON.stringify(body) },
+        (data) => AdsPrerollDecisionSchema.parse(data)
+      );
+    },
+
+    trackAdEvent(body: AdsEventRequest): Promise<void> {
+      return request(
+        "/ads/events",
+        { method: "POST", body: JSON.stringify(body) },
+        () => undefined
+      );
     },
   };
 }

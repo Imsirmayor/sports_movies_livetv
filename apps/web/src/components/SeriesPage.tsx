@@ -3,9 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { CatalogTitle } from "@frankenstein/shared-types";
-import { SiteShell } from "./SiteShell";
-import { CatalogGrid } from "./CatalogGrid";
-import { SkeletonGrid, StateBlock } from "./StateBlock";
+import { CatalogLanding } from "./CatalogLanding";
 import { apiClient } from "@/lib/api-client";
 import { isApiClientError } from "@/lib/api-error";
 
@@ -46,34 +44,13 @@ export function SeriesPage() {
   }, [q]);
 
   return (
-    <SiteShell searchHref="/series" searchPlaceholder="Search TV series">
-      <div className="page-hero">
-        <h1>Series</h1>
-        <p>
-          Live Cinemeta catalog. Episodes stream through Torrentio + RealDebrid when configured.
-        </p>
-      </div>
-
-      {q ? <p className="muted">Search results for “{q}”</p> : <p className="muted">Popular series</p>}
-      {loading ? <SkeletonGrid count={8} /> : null}
-      {configured === false ? (
-        <StateBlock
-          tone="warn"
-          title="Catalog not configured"
-          message="Set STREMIO_ADDON_URL on the API, then restart it."
-        />
-      ) : null}
-      {error ? <StateBlock tone="error" title="Could not load series" message={error} /> : null}
-      {!loading && !error && configured !== false && items.length === 0 ? (
-        <StateBlock title="No series" message="Try another search." />
-      ) : null}
-      {!loading && items.length > 0 ? (
-        <CatalogGrid
-          items={items}
-          actionLabel="Episodes"
-          hrefFor={(item) => `/series/${encodeURIComponent(item.id)}`}
-        />
-      ) : null}
-    </SiteShell>
+    <CatalogLanding
+      kind="series"
+      items={items}
+      loading={loading}
+      error={error}
+      configured={configured}
+      hrefFor={(item) => `/series/${encodeURIComponent(item.id)}`}
+    />
   );
 }

@@ -196,6 +196,12 @@ describe("frankenstein API phase two", () => {
       .set("Authorization", `Bearer ${TOKEN}`)
       .expect(400);
 
+    // seg_1000+ must be allowed (FFmpeg widens past %03d). Missing file → 404, not 400.
+    await request(ctx.app)
+      .get(`/api/playback/${sessionId}/stream/seg_1000.ts`)
+      .set("Authorization", `Bearer ${TOKEN}`)
+      .expect(404);
+
     const stopped = await request(ctx.app)
       .delete(`/api/playback/${sessionId}`)
       .set("Authorization", `Bearer ${TOKEN}`)

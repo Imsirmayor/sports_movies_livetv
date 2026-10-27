@@ -1,18 +1,16 @@
+import { Suspense } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { SeriesPage } from "./SeriesPage";
 
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => "/series",
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+}));
+
 vi.mock("@/lib/api-client", () => ({
   apiClient: {
-    getHealth: vi.fn(async () => ({
-      status: "ok",
-      service: "frankenstein-api",
-      timestamp: "2026-10-25T00:00:00.000Z",
-      ffmpegAvailable: true,
-      mediaRootConfigured: true,
-      activeSessions: 0,
-      catalogConfigured: true,
-    })),
     listCatalogSeries: vi.fn(async () => ({
       items: [
         {
@@ -37,11 +35,14 @@ afterEach(() => cleanup());
 
 describe("SeriesPage", () => {
   it("loads popular series from the catalog API", async () => {
-    render(<SeriesPage />);
-    expect(screen.getByRole("heading", { name: "Series" })).toBeInTheDocument();
+    render(
+      <Suspense>
+        <SeriesPage />
+      </Suspense>
+    );
     expect(screen.queryByText(/Backend capability missing/i)).not.toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText(/Breaking Bad/i)).toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 1, name: /Breaking Bad/i })).toBeInTheDocument();
     });
   });
 });

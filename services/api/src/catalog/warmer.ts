@@ -184,7 +184,7 @@ export class CatalogWarmer {
       const job = await this.opts.jobs.startRemoteHlsJob(jobId, url, {
         live: false,
         onComplete: async (finished, code) => {
-          if (code === 0 || finished.status === "ready") {
+          if (code === 0) {
             await cache.save(cacheKey, catalogId, finished.outputDir);
           }
           await this.opts.jobs.stopJob(jobId).catch(() => undefined);

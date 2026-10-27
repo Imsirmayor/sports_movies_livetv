@@ -1,563 +1,385 @@
-<div align="center">
-  <h1>
-    <br />
-    DiscordFrankenstein
-    <br />
-  </h1>
-  <p><strong>Stream movies, TV series, and live sports directly into Discord voice channels via Go Live.</strong></p>
-  <p>
-    <a href="https://github.com/Green-LED99/DiscordFrankenstein/blob/master/LICENSE"><img src="https://img.shields.io/github/license/Green-LED99/DiscordFrankenstein?style=flat-square" alt="License" /></a>
-    <img src="https://img.shields.io/badge/node-%3E%3D22.4.0-brightgreen?style=flat-square&logo=node.js&logoColor=white" alt="Node" />
-    <img src="https://img.shields.io/badge/discord.js-v14-5865F2?style=flat-square&logo=discord&logoColor=white" alt="discord.js" />
-    <img src="https://img.shields.io/badge/typescript-v6-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
-    <img src="https://img.shields.io/badge/ffmpeg-7.1%2B-007808?style=flat-square&logo=ffmpeg&logoColor=white" alt="FFmpeg" />
-  </p>
-</div>
+# Pulse Stream
 
----
+Web + Android client for **sports**, **movies**, and **TV series**, backed by a Node.js HLS remux API (Torrentio / RealDebrid + optional live sports scrape).
 
-## Table of Contents
-
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Running](#running)
-- [Commands](#commands)
-- [Architecture](#architecture)
-- [Streaming Pipeline](#streaming-pipeline)
-- [Content Sources](#content-sources)
-- [Encoding Pipeline](#encoding-pipeline)
-- [State Management](#state-management)
-- [Key Design Patterns](#key-design-patterns)
-- [File Reference](#file-reference)
-- [Deployment](#deployment)
-- [Development](#development)
-- [Educational REST API (Phase Two)](#educational-rest-api-phase-two)
-- [Troubleshooting](#troubleshooting)
-- [Known Limitations](#known-limitations)
-- [License](#license)
-
----
-
-## Features
-
-- **Dual-Client Architecture** — Official bot handles slash commands; a separate user account Go Lives in voice channels
-- **Movie & TV Streaming** — Search by title via Cinemeta, fetch streams via Torrentio + RealDebrid, probe with FFprobe, transcode with FFmpeg
-- **Live Sports** — Scrape Sportsurge for live games with fuzzy team name matching (80+ aliases across NHL, NBA, NFL, MLB, soccer, MMA)
-- **Full Playback Controls** — Pause, resume, skip, seek, now-playing, with atomic FFmpeg restart under mutex lock
-- **Autoplay** — Automatic next-episode progression for TV series with zero user interaction
-- **Smart Command Registration** — SHA256 hash-based deduplication; both global + guild-specific commands; `guildCreate` listener for runtime joins
-- **Selfbot Voice Fallback** — Global commands work in guilds where only the streamer account is present
-- **Encoder Auto-Tuning** — Benchmarks FFmpeg at startup to find optimal resolution/FPS/preset for ≥2x realtime speed
-- **Hardware Acceleration** — Auto-detects NVIDIA NVENC, VAAPI, or falls back to software x264
-- **Aggressive Process Cleanup** — Multi-stage FFmpeg kill verification with zombie detection, 15-second watchdog for stalled streams
-
----
-
-## Prerequisites
-
-| Software | Version | Purpose | Install |
-|----------|---------|---------|---------|
-| **Node.js** | ≥ 22.4.0 | Runtime | [nodejs.org](https://nodejs.org) (LTS 22.x+) |
-| **pnpm** | ≥ 10.33.0 | Package manager | `npm install -g pnpm@10.33.0` |
-| **FFmpeg** | ≥ 7.1 | Video transcoding | [BtbN static builds](https://github.com/BtbN/FFmpeg-Builds/releases) |
-| **FFprobe** | (bundled) | Stream analysis | Included with FFmpeg |
-
-Verify:
-
-```bash
-node --version     # ≥ 22.4.0
-pnpm --version     # ≥ 10.33.0
-ffmpeg -version    # ≥ 7.1
-ffprobe -version   # ≥ 7.1
+```text
+Browser / Flutter  →  Next.js BFF (:3000) or direct API  →  API (:8787)  →  FFmpeg HLS
+                                                                    ↓
+                                                          .media-cache / Cloudflare R2
 ```
 
-### Required Accounts
-
-1. **Discord Bot Application** — [Developer Portal](https://discord.com/developers/applications) → New Application → Bot tab → copy `BOT_TOKEN`. OAuth2 scopes: `bot`, `applications.commands`. Permissions: `Send Messages`, `Connect`, `Speak`.
-2. **Discord User Account** (selfbot) — A regular user account that will Go Live. Must be in the same server(s). You need its `USER_TOKEN`.
-3. **Stremio Torrentio Addon** — [torrentio.strem.fun/configure](https://torrentio.strem.fun/configure) with RealDebrid API key. Copy the full addon URL as `STREMIO_ADDON_URL`.
+| Package | Path | Role |
+|---------|------|------|
+| API | `services/api` | Auth, catalog, sports, playback, ads |
+| Media worker | `services/media-worker` | FFmpeg HLS remux jobs |
+| Shared types | `packages/shared-types` | Zod schemas / DTOs |
+| Web | `apps/web` | Next.js UI + BFF (`/api/backend/*`) |
+| Mobile | `apps/mobile` | Flutter Android app |
 
 ---
 
-## Installation
+## Table of contents
+
+1. [Prerequisites](#1-prerequisites)
+2. [Clone & install](#2-clone--install)
+3. [Environment (`.env`)](#3-environment-env)
+4. [Local setup — Backend API](#4-local-setup--backend-api)
+5. [Local setup — Web frontend](#5-local-setup--web-frontend)
+6. [Local setup — Mobile (Android)](#6-local-setup--mobile-android)
+7. [Production deploy — Backend](#7-production-deploy--backend)
+8. [Production deploy — Web](#8-production-deploy--web)
+9. [Production deploy — Mobile](#9-production-deploy--mobile)
+10. [Disk, cache & speed](#10-disk-cache--speed)
+11. [Ads (optional)](#11-ads-optional)
+12. [Useful commands](#12-useful-commands)
+13. [Troubleshooting](#13-troubleshooting)
+
+---
+
+## 1. Prerequisites
+
+| Tool | Version | Why |
+|------|---------|-----|
+| **Node.js** | ≥ 22.4 (26 OK) | API + Next.js |
+| **pnpm** | ≥ 10.33 | Workspace installs |
+| **FFmpeg** + **ffprobe** | ≥ 6 (7.1+ ideal) | HLS remux |
+| **Flutter** | stable (3.22+) | Android app only |
+| **Android Studio / SDK** | recent | Emulator or device |
 
 ```bash
-git clone https://github.com/Green-LED99/DiscordFrankenstein.git
+node --version
+pnpm --version
+ffmpeg -version
+ffprobe -version
+flutter doctor   # mobile only
+```
+
+**Accounts (for real movies/series):**
+
+1. [RealDebrid](https://real-debrid.com/) API key  
+2. Configure [Torrentio](https://torrentio.strem.fun/configure) with that key → copy the full addon URL → `STREMIO_ADDON_URL`
+
+---
+
+## 2. Clone & install
+
+```bash
+git clone <your-repo-url> DiscordFrankenstein
 cd DiscordFrankenstein
-pnpm install    # Applies the @dank074/discord-video-stream patch automatically
-pnpm build      # Compile TypeScript to dist/
+
+# Use a modern Node (example with nvm)
+nvm use 26   # or 22+
+
+pnpm install
+pnpm build:platform
 ```
 
-If `pnpm install` fails on native modules:
-- **Windows**: Install Visual Studio Build Tools or `npm install -g windows-build-tools`
-- **Linux**: `sudo apt install build-essential python3`
-- **macOS**: `xcode-select --install`
+Optional local sample file for fixture sports / media list:
+
+```bash
+mkdir -p media/samples
+pnpm sample:generate
+```
 
 ---
 
-## Configuration
+## 3. Environment (`.env`)
 
-Create a `.env` file in the project root:
+All server config lives in the **repo root** `.env` (gitignored).
 
-### Required
+```bash
+cp .env.example .env
+```
+
+Generate a strong API token:
+
+```bash
+# macOS / Linux
+openssl rand -hex 32
+```
+
+Paste it into `.env` as `API_TOKEN=...`.
+
+### Required for API + web
+
+| Variable | Example | Notes |
+|----------|---------|--------|
+| `API_TOKEN` | long random hex | Shared secret. **Same value** on API, web BFF, and mobile. |
+| `API_HOST` | `127.0.0.1` local / `0.0.0.0` server | Bind address |
+| `API_PORT` | `8787` | API port |
+| `API_BASE_URL` | `http://127.0.0.1:8787` | What the **web BFF** calls (not the browser) |
+| `MEDIA_ROOT` | `media/samples` | Must exist |
+| `MEDIA_WORK_ROOT` | `.media-work` | Temp remux dirs (auto-purged on boot / stop) |
+| `FFMPEG_BINARY` | `ffmpeg` | Or absolute path |
+
+### Strongly recommended
+
+| Variable | Example | Notes |
+|----------|---------|--------|
+| `STREMIO_ADDON_URL` | `https://torrentio.strem.fun/...\|realdebrid=KEY/` | Movies & series streams |
+| `SPORTS_PROVIDER` | `fixture` or `sportsurge` | Live sports source |
+| `MAX_RESOLUTION` | `720` | Cap stream quality / remux load |
+
+### Capacity & disk (tune for VPS)
+
+| Variable | Small VPS | Powerful host |
+|----------|-----------|---------------|
+| `MAX_CONCURRENT_JOBS` | `2` | `4`–`8` |
+| `MAX_EDGE_SESSIONS` | `24` | `100`+ |
+| `STREAM_CACHE_MAX_ENTRIES` | `10`–`20` | `40`+ |
+| `CATALOG_WARM_FULL_REMUX` | `false` | `true` if disk/CPU allow |
+
+### Optional CDN (production speed)
+
+| Variable | Purpose |
+|----------|---------|
+| `R2_ACCOUNT_ID` | Cloudflare account |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 API token |
+| `R2_BUCKET` | Bucket name |
+| `R2_PUBLIC_BASE_URL` | `https://pub-….r2.dev` or custom domain |
+| `R2_PREFIX` | Object prefix (default `hls`) |
+
+**Fallback:** leave `R2_*` empty → API uses local `.media-cache` only.  
+With R2 set → warm plays prefer CDN; if R2 is down/missing, API falls back to local cache automatically.  
+Check `GET /api/health` → `r2Enabled` / `streamDelivery` (`r2_then_local` | `local` | `off`).
+
+Full list: [`.env.example`](./.env.example). Mobile notes: [`apps/mobile/README.md`](./apps/mobile/README.md).
+
+> **Never commit `.env`.** Only `.env.example` is tracked.
+
+---
+
+## 4. Local setup — Backend API
+
+### Steps
+
+1. Ensure `.env` exists with at least `API_TOKEN`, `MEDIA_ROOT`, `API_HOST`, `API_PORT`.
+2. Ensure `MEDIA_ROOT` exists (`media/samples`).
+3. Build & start:
+
+```bash
+# from repo root
+pnpm build:platform
+pnpm start:api
+```
+
+Dev (hot reload):
+
+```bash
+pnpm dev:api
+```
+
+### Verify
+
+```bash
+curl -s http://127.0.0.1:8787/api/health \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
+```
+
+You should see JSON with health / config flags.
+
+### Notes
+
+- Default bind is **loopback only** (`API_HOST=127.0.0.1`) — fine for web on the same machine.
+- For a **phone on Wi‑Fi**, set `API_HOST=0.0.0.0` and use your LAN IP in the app.
+- Orphan remux folders under `.media-work` are deleted when the API starts.
+
+---
+
+## 5. Local setup — Web frontend
+
+The browser never gets `API_TOKEN`. Next.js proxies `/api/backend/*` → `$API_BASE_URL/api/*` with the Bearer header.
+
+### Steps
+
+1. Same root `.env` must include:
 
 ```env
-BOT_TOKEN=your_bot_token_here
-USER_TOKEN=your_user_token_here
-STREMIO_ADDON_URL=https://torrentio.strem.fun/realdebrid=YOURAPIKEY/
+API_TOKEN=your-token
+API_BASE_URL=http://127.0.0.1:8787
 ```
 
-### Optional
-
-| Variable | Default | Options | Description |
-|----------|---------|---------|-------------|
-| `MAX_RESOLUTION` | `720` | `2160`, `1080`, `720`, `480` | Maximum output resolution in pixels |
-| `MAX_FPS` | `30` | Any integer | Maximum output frame rate |
-| `VIDEO_BITRATE` | `1500` | Any integer (kbps) | Video bitrate |
-| `HARDWARE_ACCEL` | `auto` | `auto`, `nvidia`, `vaapi`, `none` | Hardware encoder selection |
-| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, `ERROR` | Log verbosity |
-
-Startup validates all config and exits immediately with a clear error if anything is wrong.
-
----
-
-## Running
-
-### Production
+2. Start API (section 4), then in another terminal:
 
 ```bash
-pnpm build && pnpm start
+# Dev (recommended while iterating)
+pnpm dev:web
+
+# Or production-like build
+pnpm build:web
+pnpm start:web
 ```
 
-### Development
+3. Open [http://127.0.0.1:3000](http://127.0.0.1:3000)
+
+### Optional web-only overrides
+
+Create `apps/web/.env.local` if you need different values than the root `.env`:
+
+```env
+API_TOKEN=your-token
+API_BASE_URL=http://127.0.0.1:8787
+NEXT_PUBLIC_BRAND_NAME=Pulse Stream
+```
+
+### Checklist
+
+- [ ] API returns 200 on `/api/health` with Bearer token  
+- [ ] Web loads home without “Unable to reach the media API”  
+- [ ] Movies search works only if `STREMIO_ADDON_URL` is set  
+
+---
+
+## 6. Local setup — Mobile (Android)
+
+App package: `apps/mobile` (Flutter). It talks to the API with `Authorization: Bearer <API_TOKEN>`.
+
+### A. Emulator (easiest)
+
+On Android emulator, host `localhost` is **`10.0.2.2`**.
+
+1. API running with `API_HOST=127.0.0.1` (default) is enough.  
+2. Run:
 
 ```bash
-pnpm dev    # tsx — runs TypeScript directly
+cd apps/mobile
+flutter pub get
+flutter run \
+  --dart-define=API_BASE_URL=http://10.0.2.2:8787 \
+  --dart-define=API_TOKEN=YOUR_API_TOKEN
 ```
 
-### Startup Sequence
+Or open **Settings** in the app and paste Base URL + Token (saved on device).
 
-1. **Load config** — Validate all environment variables
-2. **Auto-tune encoder** — Benchmark FFmpeg across resolution/FPS/preset combos, select first achieving ≥2x realtime
-3. **Init selfbot** — Log in the user account (`USER_TOKEN`)
-4. **Init bot** — Log in the bot account (`BOT_TOKEN`), register slash commands on `ready`
-5. **Register commands** — If definitions changed: PUT global + all guilds. If unchanged: only register to new guilds.
+### B. Physical phone (same Wi‑Fi)
 
-Expected logs:
+1. In root `.env`:
 
-```
-[INFO] [Main] DiscordFrankenstein starting...
-[INFO] [Encoder] Benchmark: 1280x720@30fps preset=medium -> speed=15.80x
-[INFO] [Encoder] Auto-tune result: 1280x720@30fps preset=medium (speed: 15.80x)
-[INFO] [StreamerClient] Selfbot logged in as YourUserAccount
-[INFO] [Bot] Bot logged in as Dr. Frankenstein#4056
-[INFO] [Commands] Command definitions changed — registering globally and to all guilds
-[INFO] [Commands] Global commands registered
-[INFO] [Commands] Registered 11 commands in Your Server
-[INFO] [Commands] Command registration complete
-[INFO] [Bot] Bot ready
+```env
+API_HOST=0.0.0.0
+API_PORT=8787
 ```
 
-### Stopping
+2. Restart API. Find your computer’s LAN IP:
 
-`Ctrl+C` or `SIGTERM` → stops active stream → kills FFmpeg → disconnects selfbot → destroys both clients → exits.
+```bash
+# macOS
+ipconfig getifaddr en0
+# Linux
+hostname -I
+```
+
+3. Run:
+
+```bash
+cd apps/mobile
+flutter run \
+  --dart-define=API_BASE_URL=http://192.168.x.x:8787 \
+  --dart-define=API_TOKEN=YOUR_API_TOKEN
+```
+
+4. Allow the phone through any OS firewall for port `8787`.
+
+Cleartext HTTP is enabled for local debug (`usesCleartextTraffic`). Use **HTTPS** in production builds.
+
+### AdMob (optional on device)
+
+1. Set `ADMOB_ANDROID_APP_ID` (`ca-app-pub-…~…`) in `.env` for the API decisioning.  
+2. Put the **same App ID** in  
+   `apps/mobile/android/app/src/main/AndroidManifest.xml` →  
+   `com.google.android.gms.ads.APPLICATION_ID`.  
+3. Set rewarded/interstitial unit IDs in `.env` (`ADMOB_REWARDED_ANDROID`, etc.).  
+4. Rebuild/reinstall the APK after changing the manifest.
+
+More detail: [`apps/mobile/README.md`](./apps/mobile/README.md).
 
 ---
 
-## Commands
+## 7. Production deploy — Backend
 
-All commands are ephemeral (only visible to the invoker). Streaming commands require the user to be in a voice channel.
+Target: a Linux VPS (e.g. 4GB+) with Node, pnpm, FFmpeg.
 
-### Streaming
+### 7.1 Server prep
 
-| Command | Parameters | Description |
-|---------|-----------|-------------|
-| `/movie` | `title` (required) | Search and stream a movie |
-| `/series` | `title` (required), `season` (optional), `episode` (optional) | Stream a TV episode. Random episode if season/episode omitted. |
-| `/live` | `team` (required) | Stream a live sports game. Fuzzy-matches team names and abbreviations. |
+```bash
+# Example Ubuntu
+sudo apt update
+sudo apt install -y ffmpeg
 
-### Playback Controls
-
-| Command | Parameters | Description |
-|---------|-----------|-------------|
-| `/pause` | — | Pause stream. Saves timestamp, kills FFmpeg, leaves voice. Not for live. |
-| `/play` | — | Resume from pause. Restarts FFmpeg with `-ss` seek. |
-| `/skip` | `seconds` (required, negative to rewind) | Jump forward/backward. Atomic FFmpeg restart. Not for live. |
-| `/seek` | `hours`, `minutes`, `seconds` (all optional) | Jump to exact timestamp. Not for live. |
-| `/np` | — | Show current title and elapsed time. Works while playing or paused. |
-| `/next` | — | Play next episode. Series only. |
-| `/autoplay` | — | Toggle auto next-episode. Series only. |
-| `/stop` | — | Stop everything. Clears paused state, disables autoplay. |
-
----
-
-## Architecture
-
-```
-                    Discord Server
-                    ┌─────────────────────────────────┐
-                    │                                 │
-User ──slash cmd──> │  Dr. Frankenstein (Bot Client)   │ ← discord.js v14
-                    │  Slash commands, interactions,   │   BOT_TOKEN
-                    │  UI (pickers, buttons)           │
-                    │                                 │
-                    │  Selfbot (Streamer Client)       │ ← discord.js-selfbot-v13
-                    │  Joins voice, Go Lives,          │   USER_TOKEN
-                    │  Streams video + audio           │   + @dank074/discord-video-stream
-                    └──────────────┬──────────────────┘
-                                   │
-                         ┌─────────┴──────────┐
-                         │      FFmpeg         │
-                         │  H.264 Baseline 3.1 │
-                         │  Opus 128kbps       │
-                         │  → NUT pipe →       │
-                         │  Discord RTP/DAVE   │
-                         └────────────────────┘
+# Node 22+ via nvm or nodesource
+curl -fsSL https://get.pnpm.io/install.sh | sh -
 ```
 
-### Dual-Client Model
+### 7.2 App directory
 
-- **Bot Client** (`discord.js` v14, `BOT_TOKEN`) — Registers slash commands, handles user interactions, builds picker UIs. Cannot Go Live.
-- **Selfbot Client** (`discord.js-selfbot-v13`, `USER_TOKEN`) — Joins voice channels and broadcasts video via Go Live. The `@dank074/discord-video-stream` library manages WebRTC/RTP/DAVE.
-
-### Voice Resolution Fallback
-
-When a global command is used in a guild the bot isn't in (but the selfbot is), `interaction.member.voice` is empty (bot has no gateway cache). The `resolveVoiceChannel()` helper (`src/bot/commands/voice.ts`) falls back to the selfbot's gateway cache:
-
-1. **Primary**: `(interaction.member as GuildMember).voice.channelId` (bot cache)
-2. **Fallback**: `getSelfbotClient().guilds.cache.get(guildId).voiceStates.cache.get(userId).channelId` (selfbot cache)
-
----
-
-## Streaming Pipeline
-
-### Movie/Series Flow
-
-```
-/movie "Fight Club"
-    │
-    ▼
-1. Search Cinemeta ──→ GET /catalog/movie/top/search=Fight%20Club.json
-    │                  Returns: { id: "tt0137523", name: "Fight Club", year: "1999" }
-    ▼
-2. Fetch Streams ────→ GET /stream/movie/tt0137523.json (via Torrentio + RealDebrid)
-    │                  Returns: Array of stream objects with URLs, seeders, resolution
-    ▼
-3. Rank & Filter ────→ Sort: seeders DESC → resolution DESC → h264 bonus → size DESC
-    │                  Filter to MAX_RESOLUTION, take top 5
-    ▼
-4. User Picks ───────→ Discord button UI (30s timeout, auto-selects if only 1)
-    │
-    ▼
-5. Probe Stream ─────→ ffprobe: codec, resolution, FPS, audio tracks, B-frames, VFR
-    │
-    ▼
-6. Audio/Sub Pick ───→ User selects audio track and subtitle language via buttons
-    │
-    ▼
-7. Start Stream ─────→ selfbot.joinVoice() → FFmpeg encodes → playStream(Go Live)
+```bash
+sudo mkdir -p /opt/pulse-stream
+sudo chown $USER:$USER /opt/pulse-stream
+cd /opt/pulse-stream
+git clone <your-repo-url> .
+pnpm install --frozen-lockfile
+pnpm build:platform
 ```
 
-### Live Sports Flow
+### 7.3 Production `.env`
 
-```
-/live "Lakers"
-    │
-    ▼
-1. Fetch Events ─────→ Scrape sportsurge.ws for live game links
-    │
-    ▼
-2. Fuzzy Match ──────→ Token scoring + alias expansion ("Lakers" → ["lakers","los","angeles"])
-    │
-    ▼
-3. User Picks ───────→ Button UI if multiple matches
-    │
-    ▼
-4. Resolve URL ──────→ Event page → embed ID → base64 decode → HLS URL + auth headers
-    │
-    ▼
-5. Probe & Stream ───→ ffprobe (with headers) → FFmpeg → Go Live
+```bash
+cp .env.example .env
+nano .env
 ```
 
-### Stream Lifecycle
+**Minimum production values:**
 
-```
-START ─→ acquireLock ─→ teardown existing ─→ probe ─→ autoTune ─→ buildOptions
-         ─→ joinVoice ─→ prepareStream (FFmpeg) ─→ startSyncMonitor ─→ playStream
-         ─→ startWatchdog ─→ releaseLock
+```env
+API_TOKEN=<openssl rand -hex 32>
+API_HOST=127.0.0.1
+API_PORT=8787
+API_BASE_URL=http://127.0.0.1:8787
 
-PAUSE ─→ acquireLock ─→ calcElapsed ─→ savePausedState ─→ teardown ─→ releaseLock
+MEDIA_ROOT=media/samples
+MEDIA_WORK_ROOT=.media-work
+FFMPEG_BINARY=ffmpeg
 
-PLAY ──→ acquireLock ─→ readPausedState ─→ offsetSubtitles ─→ startStream(seekSec)
-         ─→ clearPausedState ─→ releaseLock
+STREMIO_ADDON_URL=https://torrentio.strem.fun/...|realdebrid=YOUR_KEY/
+SPORTS_PROVIDER=sportsurge
+MAX_RESOLUTION=720
 
-SEEK ──→ acquireLock ─→ captureContext ─→ teardown ─→ wait 1s ─→ zombieCheck
-         ─→ startStream(newSeekSec) ─→ releaseLock
+# Protect a small disk
+MAX_CONCURRENT_JOBS=2
+MAX_EDGE_SESSIONS=24
+STREAM_CACHE_ROOT=.media-cache
+STREAM_CACHE_MAX_ENTRIES=15
+CATALOG_WARM_INTERVAL_MS=1800000
+CATALOG_WARM_COUNT=3
+CATALOG_WARM_FULL_REMUX=false
 
-STOP ──→ acquireLock ─→ teardown ─→ clearPaused ─→ disableAutoplay ─→ releaseLock
-
-END ───→ acquireLock ─→ teardown ─→ if autoplay: wait 1s → zombieCheck → callback()
-```
-
----
-
-## Content Sources
-
-### Cinemeta — Movie/Series Metadata
-
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /catalog/{movie\|series}/top/search={query}.json` | Search by title → IMDB IDs |
-| `GET /meta/series/{imdbId}.json` | Full series metadata with all episodes |
-
-- **Base**: `https://v3-cinemeta.strem.io`
-- **Timeout**: 15s
-- **Key functions**: `searchContent()`, `resolveEpisode()`, `getNextEpisode()`
-- **File**: `src/services/cinemeta.ts`
-
-### Torrentio — Stream URLs
-
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /stream/movie/{imdbId}.json` | Movie streams |
-| `GET /stream/series/{imdbId}:{season}:{episode}.json` | Episode streams |
-
-- **Base**: `STREMIO_ADDON_URL` (user-configured with RealDebrid)
-- **Timeout**: 15s
-- **Ranking**: Parses title metadata (resolution, codec, seeders, size, language), scores and sorts
-- **Key functions**: `fetchStreams()`, `getTopStreams()`, `rankStreams()`
-- **File**: `src/services/torrentio.ts`
-
-### OpenSubtitles — Subtitles
-
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /subtitles/{movie\|series}/{videoId}.json` | Available subtitle tracks |
-
-- **Base**: `https://opensubtitles-v3.strem.io`
-- **Timeout**: 10s fetch, 15s download
-- **Downloads SRT to temp dir**, offsets timestamps when seeking (`-ss` resets PTS)
-- **Key functions**: `fetchSubtitles()`, `downloadSubtitle()`, `offsetSubtitleFile()`
-- **File**: `src/services/opensubtitles.ts`
-
-### Sportsurge — Live Sports
-
-- **Main**: `https://sportsurge.ws` (HTML scraping)
-- **Embed**: `https://gooz.aapmains.net` (HLS resolution)
-- **Timeout**: 10s
-- **Flow**: Scrape event links → fuzzy match team query → fetch embed ID → base64 decode HLS URL → return with auth headers
-- **Key functions**: `fetchEvents()`, `fetchStreamEmbedId()`, `resolveStreamUrl()`
-- **Files**: `src/services/sportsurge.ts`, `src/services/livematch.ts`
-
-### LiveMatch — Fuzzy Team Matching
-
-- **80+ team aliases** across NHL, NBA, NFL, MLB, EPL, UCL, UFC
-- **Token-based scoring**: exact match = 3 points, substring = 1 point
-- **Alias expansion**: "avs" → `["avalanche", "colorado"]`, "yanks" → `["yankees", "new", "york"]`
-- **Key function**: `matchAllEvents(events, query)`
-- **File**: `src/services/livematch.ts`
-
----
-
-## Encoding Pipeline
-
-### FFmpeg Settings
-
-| Setting | Value | Reason |
-|---------|-------|--------|
-| Video codec | H.264 Baseline, Level 3.1 | Maximum Discord compatibility |
-| Audio codec | Opus | Required by Discord voice |
-| Audio bitrate | 128 kbps | Good quality, low bandwidth |
-| Video bitrate | Configurable (default 1500 kbps) | Balance quality/bandwidth |
-| Max bitrate | 1.4× video bitrate | VBR ceiling |
-| Buffer size | Equal to video bitrate | Single-second buffer |
-| Keyframe interval | 2× FPS | Every 2 seconds |
-
-### FFmpeg Flags
-
-```
--max_delay 0              Low-latency output
--flush_packets 1          Flush every packet immediately
--bufsize:v {bitrate}k     Video buffer size
--profile:v baseline       H.264 Baseline profile
--level:v 3.1              H.264 Level 3.1
--af aresample=async=4:first_pts=0,volume=1.0   Audio resampling for sync
--ss {seconds}             Input option for keyframe-based fast seeking
+ADS_PREROLL_ENABLED=false
 ```
 
-### Hardware Acceleration
+Create dirs:
 
-On startup with `HARDWARE_ACCEL=auto`:
-
-1. Runs `ffmpeg -hide_banner -hwaccels`
-2. Detects `cuda`/`nvenc` (NVIDIA) or `vaapi` (Intel/AMD Linux)
-3. Falls back to software if neither found
-
-### Auto-Tuning
-
-Benchmarks FFmpeg at startup to find the best settings:
-
-1. Tests resolution/FPS/preset combos in quality-descending order
-2. 5-second synthetic encode per combo
-3. Selects first combo achieving ≥ 2.0× realtime speed
-4. Fallback: 854×480 @ 24fps ultrafast
-
-| Hardware | Encoder | Presets |
-|----------|---------|---------|
-| NVIDIA | `h264_nvenc` | p1–p7 (mapped from x264) |
-| VAAPI | `h264_vaapi` | N/A |
-| Software | `libx264` | ultrafast – slow (auto-tuned) |
-
----
-
-## State Management
-
-All state lives in `src/streamer/stream.ts` as module-level variables, protected by a single async mutex lock (`streamLock`).
-
-| Variable | Type | Purpose |
-|----------|------|---------|
-| `activeStream` | `ActiveStream \| null` | Current FFmpeg process, timers, metadata, abort controller |
-| `pausedState` | `PausedState \| null` | Saved context from `/pause` (URL, elapsed time, audio track, subtitles, series info) |
-| `autoplayEnabled` | `boolean` | Whether autoplay is on |
-| `autoplayCallback` | `(() => Promise<void>) \| null` | Function to start next episode |
-| `lastKnownGuildId` | `string \| null` | Guild for autoplay to rejoin |
-| `lastKnownChannelId` | `string \| null` | Channel for autoplay to rejoin |
-| `streamLock` | `Promise<void>` | Async mutex preventing concurrent state modifications |
-
-Every public function that modifies state acquires the lock first: `startVideoStream`, `pauseStream`, `restartAtPosition`, `stopVideoStream`, `handleStreamEnd`.
-
----
-
-## Key Design Patterns
-
-### Async Mutex Lock
-All stream state transitions serialize through a single lock. This prevents race conditions between user commands (`/skip` while `/pause` is processing) and stream-end events (watchdog firing during `/seek`).
-
-### Verified FFmpeg Kill
-Multi-stage process termination:
-1. `command.kill("SIGKILL")` — direct kill
-2. OS-level kill (`taskkill` on Windows, `pkill` on Linux)
-3. Poll 3 times (500ms apart) to verify dead
-4. CRITICAL log if still alive
-
-### Atomic Restart (Seek/Skip)
-Hold the lock for the entire teardown → wait → zombie check → relaunch cycle. No interleaving possible.
-
-### Hash-Based Command Registration
-SHA256 hash of command definitions stored in `.command-hash` file:
-```json
-{ "global": "sha256hex", "guilds": { "guildId": "sha256hex" } }
-```
-- **Commands changed**: PUT global once + PUT every guild
-- **Commands unchanged**: Only PUT to new guilds missing from hash file
-- **`guildCreate` listener**: Registers commands to guilds joined at runtime
-
-### Watchdog Timer
-Every 5 seconds, checks `Date.now() - lastFrameTime > 15000`. If no frame data for 15 seconds, declares stream ended and triggers teardown + autoplay.
-
-### Subtitle Time Offset
-FFmpeg's `-ss` input option resets PTS to 0. When resuming at a seek position, all SRT timestamps must be shifted backward by the seek offset. Entries ending before the seek point are dropped.
-
----
-
-## File Reference
-
-```
-DiscordFrankenstein/
-├── .env                          # Environment variables (create this)
-├── .command-hash                 # Command registration hash cache (auto-generated)
-├── package.json                  # Dependencies, scripts, pnpm config
-├── tsconfig.json                 # TypeScript strict mode, ESM, Node22
-├── patches/
-│   └── @dank074__discord-video-stream.patch
-├── src/
-│   ├── index.ts                  # Entry point: startup sequence, graceful shutdown
-│   ├── bot/
-│   │   ├── client.ts             # Bot client init, ready event, guildCreate listener
-│   │   ├── interactions.ts       # Slash command dispatcher (defers replies, routes to handlers)
-│   │   └── commands/
-│   │       ├── register.ts       # Command registration (REST API, hash dedup, rate limit retry)
-│   │       ├── voice.ts          # Voice channel resolution (bot cache → selfbot fallback)
-│   │       ├── movie.ts          # /movie handler
-│   │       ├── series.ts         # /series handler
-│   │       ├── live.ts           # /live handler
-│   │       ├── playback.ts       # /pause /play /skip /seek /np /next /autoplay + autoplay system
-│   │       ├── stop.ts           # /stop handler
-│   │       ├── picker.ts         # Stream selection button UI (30s timeout)
-│   │       └── options.ts        # Audio track + subtitle language selection UI
-│   ├── streamer/
-│   │   ├── client.ts             # Selfbot client init (discord.js-selfbot-v13 + Streamer)
-│   │   ├── stream.ts             # Core engine: FFmpeg lifecycle, state, mutex, watchdog, autoplay
-│   │   └── encoder.ts            # FFmpeg option builder, hardware detection, auto-tune benchmark
-│   ├── services/
-│   │   ├── cinemeta.ts           # Movie/series search, episode resolution, next episode
-│   │   ├── torrentio.ts          # Stream fetching, metadata parsing, ranking
-│   │   ├── opensubtitles.ts      # Subtitle fetch, download, SRT time offset
-│   │   ├── ffprobe.ts            # Stream probing (codec, resolution, FPS, audio tracks)
-│   │   ├── sportsurge.ts         # Live sports scraping, embed resolution, HLS URL decode
-│   │   └── livematch.ts          # Fuzzy team matching with 80+ aliases
-│   └── utils/
-│       ├── config.ts             # Env var loading + validation (exits on missing required vars)
-│       ├── logger.ts             # Structured logging: [timestamp] [LEVEL] [Component] message
-│       └── sync.ts               # A/V sync monitor (parses FFmpeg stderr speed readings)
-└── dist/                         # Compiled JS output (pnpm build)
+```bash
+mkdir -p media/samples .media-work .media-cache
+pnpm sample:generate   # optional
 ```
 
-<details>
-<summary><strong>Key Files Explained</strong></summary>
+### 7.4 Run under a process manager
 
-| File | Role |
-|------|------|
-| `stream.ts` | **Heart of the system.** Manages FFmpeg lifecycle, voice connections, active/paused state, the mutex lock, watchdog timer, stream-end handler, and autoplay callbacks. Every streaming operation flows through here. ~615 lines. |
-| `encoder.ts` | Builds FFmpeg command options. Detects hardware acceleration, benchmarks encoding speed at startup, selects optimal settings. Constructs codec, bitrate, resolution, FPS, seeking, header, and audio filter options. |
-| `register.ts` | Registers all 11 slash commands via Discord REST API. Hash-based dedup (`SHA256` of command definitions). Handles 429 rate limits with single retry. Exports `registerCommandsToNewGuild()` for runtime guild joins. |
-| `interactions.ts` | Central dispatcher. Defers replies immediately (Discord's 3-second deadline), then routes to the appropriate handler via switch statement. |
-| `playback.ts` | All playback controls + autoplay system. Skip/seek use `restartAtPosition()` for atomic FFmpeg restart. `playNextEpisode()` shared between `/next` and autoplay callback. |
-| `voice.ts` | Resolves user's voice channel with dual-source fallback (bot gateway cache → selfbot gateway cache). Enables global commands in guilds without bot presence. |
-| `torrentio.ts` | Fetches streams, parses title metadata (resolution, codec, seeders, size, language via emoji/text), scores and ranks. Returns top 5 for picker UI. |
-| `cinemeta.ts` | Searches movies/series by title, resolves specific or random episodes, finds next episode for autoplay. |
-| `livematch.ts` | Fuzzy team matching. Tokenizes query, expands aliases (80+ teams), scores events, sorts by relevance. |
-
-</details>
-
-<details>
-<summary><strong>Library Patch Details</strong></summary>
-
-`patches/@dank074__discord-video-stream.patch` modifies `@dank074/discord-video-stream` to:
-
-1. **Reduce playout delay** — Audio 0ms (from 1ms), video 0ms (from 10ms)
-2. **Increase sync tolerance** — 50ms (from 20ms) to reduce unnecessary corrections
-3. **Precision sleep** — Custom sleep function for accurate frame timing
-4. **Drift correction** — Diagnostic logging every 300 frames with sync stats
-5. **HLS handling** — `-extension_picky 0` for non-standard segment extensions
-6. **Audio/subtitle passthrough** — FFmpeg options for stream selection (partially disabled)
-
-Applied automatically by `pnpm install`.
-
-</details>
-
----
-
-## Deployment
-
-### Linux Server (systemd)
+**systemd example** (`/etc/systemd/system/pulse-api.service`):
 
 ```ini
-# /etc/systemd/system/frankenstein.service
 [Unit]
-Description=DiscordFrankenstein Streaming Bot
+Description=Pulse Stream API
 After=network.target
 
 [Service]
 Type=simple
-User=frankenstein
-WorkingDirectory=/home/frankenstein/bot
-ExecStart=/usr/bin/node dist/index.js
+WorkingDirectory=/opt/pulse-stream
+Environment=NODE_ENV=production
+ExecStart=/home/YOUR_USER/.local/share/pnpm/pnpm --filter @frankenstein/api start
 Restart=on-failure
 RestartSec=5
-EnvironmentFile=/home/frankenstein/bot/.env
+User=YOUR_USER
 
 [Install]
 WantedBy=multi-user.target
@@ -565,160 +387,183 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable frankenstein
-sudo systemctl start frankenstein
-journalctl -u frankenstein -f    # View logs
+sudo systemctl enable --now pulse-api
+sudo systemctl status pulse-api
 ```
 
-### FFmpeg 7.1+ on Ubuntu
+Keep the API on **localhost** and put **Caddy / nginx / Cloudflare Tunnel** in front of the **web** app (recommended). Only expose the API publicly if you understand that every client needs `API_TOKEN`.
 
-The Ubuntu apt package ships FFmpeg 6.1 which lacks `-extension_picky`. Install 7.1+ via static builds:
+### 7.5 Disk hygiene
 
 ```bash
-cd /tmp
-wget https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
-tar xf ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
-sudo cp ffmpeg-n7.1-latest-linux64-gpl-7.1/bin/{ffmpeg,ffprobe} /usr/local/bin/
-sudo chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
-hash -r    # Clear shell path cache
-ffmpeg -version    # Should show 7.1.x
+# Safe: wipe in-flight remux junk (API also does this on boot)
+rm -rf /opt/pulse-stream/.media-work/*
+
+# Optional: reclaim cache (slower first plays until rewarmed)
+# rm -rf /opt/pulse-stream/.media-cache/*
 ```
 
-`/usr/local/bin` takes PATH priority over `/usr/bin`. To revert: `sudo rm /usr/local/bin/ffmpeg /usr/local/bin/ffprobe`.
+Do **not** commit or sync `.media-work` / `.media-cache` to git.
 
 ---
 
-## Educational REST API (Phase Two)
+## 8. Production deploy — Web
 
-A parallel private API for **local authorized sample media** and browser-compatible **HLS** playback. It does **not** use the Discord Go Live / NUT pipeline. Discord bot sources under `src/**` are unchanged.
+Build on the same host (or a CI machine) with production env available at **build/start** time for the BFF.
 
-| Command | Description |
-|---------|-------------|
-| `pnpm sample:generate` | Create `media/samples/sample.mp4` with FFmpeg |
-| `pnpm build:platform` | Build shared-types, media-worker, and API |
-| `pnpm dev:api` | Run the API with `tsx` |
-| `pnpm test:platform` | Run media-worker + API automated tests |
+### Same VPS as API
 
-Set `API_TOKEN` and optionally `MEDIA_ROOT` in `.env` (see `.env.example`). Full contracts and curl examples: [`docs/api.md`](docs/api.md). Architecture notes: [`docs/architecture.md`](docs/architecture.md).
-
-Server-side pause/resume/seek endpoints are **not** implemented in Phase Two; once HLS is `ready`, clients seek/pause locally.
-
-## Web UI (Phase Three)
-
-Next.js app in `apps/web` branded **Bowa** (bow-tie logo, dark Cinemos-style shell). The browser talks only to the Next BFF at `/api/backend/*`; `API_TOKEN` stays on the server.
-
-| Command | Description |
-|---------|-------------|
-| `pnpm dev:web` | Next.js dev server (`http://127.0.0.1:3000`) |
-| `pnpm build:web` | Production web build |
-| `pnpm start:web` | Serve production web build |
-| `pnpm test:web` | Web unit tests |
-
-Also set `API_BASE_URL=http://127.0.0.1:8787` in `.env`. Details: [`docs/web.md`](docs/web.md).
-
----
-
-## Development
-
-### Scripts
-
-| Command | Description |
-|---------|-------------|
-| `pnpm dev` | Run TypeScript directly via `tsx` (development) |
-| `pnpm build` | Compile TypeScript to `dist/` (Discord bot) |
-| `pnpm start` | Run compiled JavaScript (production) |
-| `pnpm build:all` | Build Discord bot + platform packages |
-
-### Type Checking
+```env
+# in /opt/pulse-stream/.env
+API_TOKEN=<same as API>
+API_BASE_URL=http://127.0.0.1:8787
+NEXT_PUBLIC_BRAND_NAME=Pulse Stream
+```
 
 ```bash
-npx tsc --noEmit
+cd /opt/pulse-stream
+pnpm build:web
+pnpm start:web    # listens on :3000
 ```
 
-### Project Conventions
+**systemd** (`pulse-web.service`):
 
-- **Strict TypeScript** — `strict: true`, zero `any`, union types over loose typing
-- **ESM modules** — `"type": "module"` in package.json, `.js` extensions in imports
-- **Component logging** — `createLogger("ComponentName")` for tagged log output
-- **Error handling** — Non-critical failures (audio/subtitle selection) log warnings but don't break the main flow. Critical failures throw and are caught at command handler level.
-- **No external database** — All state is in-memory module-level variables
+```ini
+[Unit]
+Description=Pulse Stream Web
+After=network.target pulse-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pulse-stream/apps/web
+Environment=NODE_ENV=production
+# Root .env is loaded by next.config; ensure API_* are in the environment or root .env
+ExecStart=/home/YOUR_USER/.local/share/pnpm/pnpm start
+Restart=on-failure
+User=YOUR_USER
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Reverse proxy (Caddy example)
+
+```caddy
+stream.example.com {
+  reverse_proxy 127.0.0.1:3000
+}
+```
+
+Users hit HTTPS → Next.js → BFF → local API. The token never reaches the browser.
+
+### Split hosting (Vercel / separate Node)
+
+If web runs on another host, set:
+
+```env
+API_BASE_URL=https://api.internal.example.com
+API_TOKEN=<same secret>
+```
+
+The API must be reachable from that host (private network / tunnel). Prefer **not** exposing the raw API to the public internet without extra controls.
 
 ---
 
-## Troubleshooting
+## 9. Production deploy — Mobile
 
-<details>
-<summary><strong>Bot doesn't respond to commands</strong></summary>
+### Release build
 
-- Check logs for `Registered 11 commands in <your server>`
-- If commands changed, first boot registers globally + per-guild (logs `Command definitions changed`)
-- Second boot with same commands should log `Commands unchanged ... skipping`
-- Global commands use Discord's read-repair mechanism (may take a few minutes initially)
+1. Point the app at your **public HTTPS API or BFF**.  
+   - Prefer a dedicated HTTPS API gateway, **or**  
+   - A small BFF that injects the token (do **not** ship a long-lived production `API_TOKEN` in a public APK if you can avoid it).  
+2. For a private / family build, compile-time defines are OK:
 
-</details>
-
-<details>
-<summary><strong>"Unknown interaction" errors</strong></summary>
-
-Discord's 3-second interaction deadline expired. The bot defers replies immediately, but network latency can cause this. These are transient — the bot logs a warning and continues.
-
-</details>
-
-<details>
-<summary><strong>Stream starts but no video/audio</strong></summary>
-
-- Check auto-tune log — speed must be ≥ 2.0×
-- Try `HARDWARE_ACCEL=none` to force software encoding
-- Lower `MAX_RESOLUTION=480` and `VIDEO_BITRATE=1000`
-- Verify FFmpeg version: `ffmpeg -version` (need ≥ 7.1)
-
-</details>
-
-<details>
-<summary><strong>ffprobe fails on live streams</strong></summary>
-
-- Ensure FFmpeg ≥ 7.1 (Ubuntu apt ships 6.1 which lacks `-extension_picky`)
-- See [Deployment > FFmpeg 7.1+ on Ubuntu](#ffmpeg-71-on-ubuntu) for upgrade instructions
-
-</details>
-
-<details>
-<summary><strong>FFmpeg zombie processes</strong></summary>
-
-The bot has multi-stage kill verification. If zombies persist:
 ```bash
-# Linux
-pkill -9 ffmpeg
-
-# Windows
-taskkill /F /IM ffmpeg.exe
+cd apps/mobile
+flutter build apk --release \
+  --dart-define=API_BASE_URL=https://stream.example.com/api-upstream \
+  --dart-define=API_TOKEN=YOUR_PRODUCTION_TOKEN
 ```
 
-</details>
+> If the app talks to the raw API, `API_BASE_URL` should be the API origin (no `/api` suffix); the client appends `/api`.
 
-<details>
-<summary><strong>"Could not determine your voice channel"</strong></summary>
+3. Replace the **test** AdMob App ID in `AndroidManifest.xml` with your production `ca-app-pub-…~…` before Play Store release.  
+4. Disable cleartext for production when you only use HTTPS (remove or set `usesCleartextTraffic` to `false`).  
+5. Distribute the APK / AAB via Play Console or internal testing.
 
-- You must be in a voice channel before running a streaming command
-- If the bot isn't in the guild, the selfbot must be (voice resolution falls back to selfbot cache)
-- If neither client is in the guild, voice channel cannot be resolved
+### Settings screen
 
-</details>
+Users can still override Base URL + Token in-app (useful for staging). Secure storage holds the token on device.
 
 ---
 
-## Known Limitations
+## 10. Disk, cache & speed
 
-1. **Subtitle burning disabled** — Creates extra NUT streams that break Go Live
-2. **Audio stream selection disabled** — Library limitation prevents applying selected track
-3. **No live stream reconnection** — HLS URL expiry ends the stream
-4. **Single stream at a time** — Selfbot can only be in one voice channel across all guilds
-5. **User token required** — Selfbots are gray-area per Discord ToS
-6. **No persistent state** — Restart loses all playback/autoplay state
-7. **Platform process management** — Uses `taskkill`/`tasklist` on Windows, `pkill`/`pgrep` on Linux
+| Layer | Path / service | Behavior |
+|-------|----------------|----------|
+| Work | `.media-work` | Per-session remux; deleted on stop; orphans purged on API boot |
+| Cache | `.media-cache` | LRU trimmed by `STREAM_CACHE_MAX_ENTRIES` |
+| CDN | Cloudflare R2 | Upload after successful remux; warm plays skip FFmpeg |
+
+**To go faster in production:**
+
+1. Set RealDebrid + Torrentio correctly (cached `RD+` links remux quickly).  
+2. Enable **R2** so repeat plays are CDN hits.  
+3. Keep `CATALOG_WARM_FULL_REMUX=false` on small VPS; use RD warm only.  
+4. Prefer 720p (`MAX_RESOLUTION=720`) to cut CPU and disk.
+
+See also [`docs/streaming-cache.md`](./docs/streaming-cache.md).
+
+---
+
+## 11. Ads (optional)
+
+| Platform | Network | Config |
+|----------|---------|--------|
+| Web | VAST / Google IMA, or house card | `ADS_VAST_TAG_URL`, house `ADS_HOUSE_*` |
+| Android | AdMob rewarded / interstitial | `ADMOB_*` + manifest App ID |
+
+```env
+ADS_ENABLED=true
+ADS_PREROLL_ENABLED=false   # set true when keys are ready
+ADS_SKIP_AFTER_SEC=5
+```
+
+AdMob **does not** run in the browser. Web uses VAST or house fallback.
+
+---
+
+## 12. Useful commands
+
+| Command | Purpose |
+|---------|---------|
+| `pnpm install` | Install workspace deps |
+| `pnpm build:platform` | Build types + media-worker + API |
+| `pnpm build:web` | Build Next.js |
+| `pnpm build:all` | Platform + web |
+| `pnpm start:api` / `pnpm dev:api` | Run API |
+| `pnpm start:web` / `pnpm dev:web` | Run web |
+| `pnpm test:platform` | API + media-worker tests |
+| `pnpm sample:generate` | Tiny sample MP4 under `media/samples` |
+
+---
+
+## 13. Troubleshooting
+
+| Symptom | Likely fix |
+|---------|------------|
+| Web: “Unable to reach the media API” | Start API; check `API_BASE_URL` / firewall |
+| Web / mobile: 401 | `API_TOKEN` mismatch between client and API |
+| Movies empty / no streams | Set valid `STREMIO_ADDON_URL` with RealDebrid |
+| “Too many concurrent playback sessions” | Raise `MAX_CONCURRENT_JOBS` / `MAX_EDGE_SESSIONS`, or wait for remux slots |
+| Disk filling | Lower `STREAM_CACHE_MAX_ENTRIES`, `CATALOG_WARM_FULL_REMUX=false`, wipe `.media-work`, enable R2 |
+| Movie dies ~1 hour in | Ensure you run a build that allows `seg_1000+.ts` (fixed in current API) |
+| Phone can’t connect | `API_HOST=0.0.0.0`, same Wi‑Fi, use LAN IP, check firewall |
+| Emulator can’t connect | Use `http://10.0.2.2:8787`, not `localhost` |
+| AdMob never shows | App ID `~` in manifest must match publisher; unit ID `/` alone is not enough; web never uses AdMob |
 
 ---
 
 ## License
 
-[MIT](LICENSE)
+MIT — see repository license file if present.

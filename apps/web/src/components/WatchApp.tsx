@@ -1,11 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { HealthStatus, MediaItem, PlaybackSession } from "@frankenstein/shared-types";
+import type { MediaItem, PlaybackSession } from "@frankenstein/shared-types";
 import { apiClient } from "@/lib/api-client";
 import { isApiClientError } from "@/lib/api-error";
 import { AppShell, type NavId } from "./AppShell";
-import { HealthBadge } from "./HealthBadge";
 import { HlsPlayer } from "./HlsPlayer";
 import { MediaList } from "./MediaList";
 import { IconPlay } from "./Icons";
@@ -19,10 +18,6 @@ function errMessage(err: unknown): string {
 }
 
 export function WatchApp() {
-  const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [healthLoading, setHealthLoading] = useState(true);
-  const [healthError, setHealthError] = useState<string | null>(null);
-
   const [items, setItems] = useState<MediaItem[]>([]);
   const [mediaLoading, setMediaLoading] = useState(true);
   const [mediaError, setMediaError] = useState<string | null>(null);
@@ -39,20 +34,6 @@ export function WatchApp() {
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
-
-  const refreshHealth = useCallback(async () => {
-    setHealthLoading(true);
-    try {
-      const h = await apiClient.getHealth();
-      setHealth(h);
-      setHealthError(null);
-    } catch (err) {
-      setHealth(null);
-      setHealthError(errMessage(err));
-    } finally {
-      setHealthLoading(false);
-    }
-  }, []);
 
   const loadMedia = useCallback(async (q: string) => {
     setMediaLoading(true);
@@ -73,11 +54,8 @@ export function WatchApp() {
   }, []);
 
   useEffect(() => {
-    void refreshHealth();
     void loadMedia("");
-    const id = window.setInterval(() => void refreshHealth(), 15_000);
-    return () => window.clearInterval(id);
-  }, [refreshHealth, loadMedia]);
+  }, [loadMedia]);
 
   useEffect(() => {
     if (!session || session.status !== "starting") return;
@@ -140,7 +118,6 @@ export function WatchApp() {
       const created = await apiClient.startPlayback(item.id);
       setSession(created);
       setPlaylistUrl(apiClient.toProxiedPlaylistUrl(created.playlistUrl));
-      void refreshHealth();
     } catch (err) {
       setSession(null);
       setPlaylistUrl(null);
@@ -158,7 +135,6 @@ export function WatchApp() {
       const stopped = await apiClient.stopPlayback(session.sessionId);
       setSession(stopped);
       setPlaylistUrl(null);
-      void refreshHealth();
     } catch (err) {
       setSessionError(errMessage(err));
     } finally {
@@ -167,8 +143,6 @@ export function WatchApp() {
   };
 
   const diagnostics = {
-    health,
-    healthError,
     activeNav,
     topTab,
     genre,
@@ -188,9 +162,6 @@ export function WatchApp() {
         setActiveNav("discover");
         void loadMedia(search);
       }}
-      health={health}
-      healthLoading={healthLoading}
-      healthError={healthError}
       activeNav={activeNav}
       onNavChange={(id) => {
         setActiveNav(id);
@@ -251,7 +222,7 @@ export function WatchApp() {
             type="button"
             className="accent-btn"
             style={{ width: "100%", justifyContent: "center", marginTop: "1rem" }}
-            disabled={!featured || sessionBusy || !!healthError}
+            disabled={!featured || sessionBusy}
             onClick={() => featured && void startSession(featured)}
           >
             See More / Watch
@@ -259,28 +230,13 @@ export function WatchApp() {
         </>
       }
     >
-      {healthError ? (
-        <div className="state-panel error" role="alert">
-          <h2>Backend unreachable</h2>
-          <p>{healthError}</p>
-          <p style={{ marginTop: "0.75rem" }}>
-            <button type="button" className="ghost-btn" onClick={() => void refreshHealth()}>
-              Retry health check
-            </button>
-          </p>
-        </div>
-      ) : null}
-
       {activeNav === "settings" ? (
         <section className="meta-block" aria-label="Settings">
           <h1>Settings</h1>
           <p style={{ color: "var(--text-muted)" }}>
-            Private educational build. API health and playback diagnostics are below. No account
-            logout or remote plans are wired.
+            Private educational build. Playback diagnostics are below. No account logout or remote
+            plans are wired.
           </p>
-          <div className="meta-row" style={{ marginTop: "1rem" }}>
-            <HealthBadge health={health} loading={healthLoading} error={healthError} />
-          </div>
           <details className="diagnostics" open>
             <summary>Developer diagnostics</summary>
             <pre>{JSON.stringify(diagnostics, null, 2)}</pre>
@@ -300,7 +256,7 @@ export function WatchApp() {
               <button
                 type="button"
                 className="accent-btn"
-                disabled={!featured || sessionBusy || !!healthError}
+                disabled={!featured || sessionBusy}
                 onClick={() => featured && void startSession(featured)}
               >
                 <IconPlay size={14} /> Watch Now
@@ -366,7 +322,7 @@ export function WatchApp() {
               <button
                 type="button"
                 className="accent-btn"
-                disabled={!selected || sessionBusy || !!healthError}
+                disabled={!selected || sessionBusy}
                 onClick={() => selected && void startSession(selected)}
               >
                 {session && session.status !== "stopped" ? "Restart playback" : "Start playback"}

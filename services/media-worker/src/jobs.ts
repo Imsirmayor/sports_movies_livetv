@@ -1,4 +1,4 @@
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { assertFileInsideRoot } from "./paths.js";
 import {
@@ -69,6 +69,38 @@ export class JobManager {
     this.maxEdgeSessions = options.maxEdgeSessions ?? 24;
     this.jobTimeoutMs = options.jobTimeoutMs ?? 120_000;
     this.playlistReadyTimeoutMs = options.playlistReadyTimeoutMs ?? 30_000;
+  }
+
+  /**
+   * Delete leftover remux dirs from crashed / kill -9 runs.
+   * Safe at boot when no jobs are active yet. Prevents MEDIA_WORK_ROOT disk floods.
+   */
+  async purgeOrphanWorkDirs(): Promise<number> {
+    let removed = 0;
+    let entries: string[];
+    try {
+      entries = await readdir(this.workRoot);
+    } catch {
+      return 0;
+    }
+    for (const name of entries) {
+      if (this.jobs.has(name)) continue;
+      const path = join(this.workRoot, name);
+      try {
+        const st = await stat(path);
+        if (!st.isDirectory()) continue;
+        await rm(path, { recursive: true, force: true });
+        removed += 1;
+      } catch (err) {
+        log.warn(
+          `orphan purge failed path=${path}: ${err instanceof Error ? err.message : err}`
+        );
+      }
+    }
+    if (removed > 0) {
+      log.info(`Purged ${removed} orphan remux dir(s) under ${this.workRoot}`);
+    }
+    return removed;
   }
 
   /** All active sessions (heavy + edge). */
