@@ -1,46 +1,41 @@
 {
-  "name": "discord-frankenstein",
+  "name": "pulse-stream",
   "version": "0.1.0",
-  "description": "Discord bot that streams movies and TV series to voice channels via Go Live",
-  "main": "dist/index.js",
+  "description": "Pulse Stream — web + Android sports/movies/series player (API + HLS remux)",
+  "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
-    "setup": "tsx scripts/setup.ts"
+    "build:platform": "pnpm --filter @frankenstein/shared-types --filter @frankenstein/media-worker --filter @frankenstein/api run build",
+    "build:web": "pnpm --filter @frankenstein/web build",
+    "build:all": "pnpm run build:platform && pnpm run build:web",
+    "dev:api": "pnpm --filter @frankenstein/api dev",
+    "dev:web": "pnpm --filter @frankenstein/web dev",
+    "start:api": "pnpm --filter @frankenstein/api start",
+    "start:web": "pnpm --filter @frankenstein/web start",
+    "test:api": "pnpm --filter @frankenstein/api test",
+    "test:media-worker": "pnpm --filter @frankenstein/media-worker test",
+    "test:web": "pnpm --filter @frankenstein/web test",
+    "test:platform": "pnpm run test:media-worker && pnpm run test:api",
+    "typecheck:platform": "pnpm --filter @frankenstein/shared-types --filter @frankenstein/media-worker --filter @frankenstein/api run typecheck",
+    "typecheck:web": "pnpm --filter @frankenstein/web typecheck",
+    "sample:generate": "ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=duration=5:size=640x360:rate=24 -f lavfi -i sine=frequency=440:duration=5 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest -y media/samples/sample.mp4"
   },
   "keywords": [
-    "discord",
     "streaming",
-    "video",
-    "bot"
+    "hls",
+    "sports",
+    "movies"
   ],
   "author": "",
   "license": "MIT",
   "packageManager": "pnpm@10.33.0",
   "pnpm": {
     "onlyBuiltDependencies": [
-      "@lng2004/node-datachannel",
-      "@seydx/node-av-win32-x64-mingw",
-      "@seydx/node-av-win32-x64-msvc",
-      "node-av",
-      "sharp",
-      "zeromq",
-      "esbuild"
-    ],
-    "patchedDependencies": {
-      "@dank074/discord-video-stream": "patches/@dank074__discord-video-stream.patch"
-    }
-  },
-  "dependencies": {
-    "@dank074/discord-video-stream": "6.0.0",
-    "discord.js": "^14.25.1",
-    "discord.js-selfbot-v13": "^3.7.1",
-    "dotenv": "^17.3.1"
+      "esbuild",
+      "sharp"
+    ]
   },
   "devDependencies": {
-    "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^25.5.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"

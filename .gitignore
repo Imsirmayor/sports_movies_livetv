@@ -1,14 +1,62 @@
+# Dependencies & package managers
 node_modules/
-dist/
+.pnpm-store/
+
+# Secrets — never commit
 .env
 .env.local
 .env.*.local
+!.env.example
+
+# Build / TypeScript outputs
+dist/
 *.js.map
 *.d.ts.map
 *.tsbuildinfo
 *.log
 .DS_Store
+.command-hash
+
+# Legacy bot scratch files
 test_input.ts
 test_stream.ts
 test_timing.ts
-.command-hash
+
+# ── Media / HLS (production disk — do NOT push) ─────────────────────────
+# Active remux workspace (can grow to tens of GB; wiped on stop / API boot)
+.media-work/
+# Finished HLS edge cache (LRU trimmed by STREAM_CACHE_MAX_ENTRIES)
+.media-cache/
+media/samples/*
+!media/samples/.gitkeep
+
+# Package build outputs
+packages/*/dist/
+services/*/dist/
+apps/web/.next/
+apps/web/out/
+
+# Flutter / mobile
+apps/mobile/.dart_tool/
+apps/mobile/.flutter-plugins
+apps/mobile/.flutter-plugins-dependencies
+apps/mobile/.packages
+apps/mobile/build/
+apps/mobile/.pub-cache/
+apps/mobile/android/.gradle/
+apps/mobile/android/local.properties
+apps/mobile/android/app/debug/
+apps/mobile/android/app/profile/
+apps/mobile/android/app/release/
+apps/mobile/ios/Pods/
+apps/mobile/ios/.symlinks/
+apps/mobile/ios/Flutter/Flutter.framework
+apps/mobile/ios/Flutter/Flutter.podspec
+apps/mobile/**/*.iml
+apps/mobile/.idea/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*~
