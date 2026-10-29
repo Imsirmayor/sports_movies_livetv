@@ -19,8 +19,8 @@ export function BowaLogo({ size = 28, showWordmark = true }: Props) {
       >
         <defs>
           <linearGradient id="pulseMarkGrad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#4A90E2" />
-            <stop offset="100%" stopColor="#7B61FF" />
+            <stop offset="0%" stopColor="#00D2FF" />
+            <stop offset="100%" stopColor="#0066FF" />
           </linearGradient>
         </defs>
         <rect width="48" height="48" rx="12" fill="url(#pulseMarkGrad)" />

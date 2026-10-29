@@ -38,8 +38,17 @@ export function SiteHeader({
   return (
     <header className="site-header">
       <div className="site-header-inner">
+        <button
+          type="button"
+          className="icon-btn mobile-menu-trigger mobile-only"
+          aria-label={open ? "Close menu" : "Open menu"}
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? <IconClose size={20} /> : <IconMenu size={20} />}
+        </button>
         <Link href="/" className="site-brand" aria-label={`${BRAND_NAME} home`}>
-          <BowaLogo />
+          <BowaLogo size={26} />
         </Link>
 
         <nav className="site-nav desktop-nav" aria-label="Primary">
@@ -75,15 +84,10 @@ export function SiteHeader({
         </form>
 
         <div className="site-header-actions">
-          <button
-            type="button"
-            className="icon-btn mobile-only"
-            aria-label={open ? "Close menu" : "Open menu"}
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-          >
-            {open ? <IconClose /> : <IconMenu />}
+          <button type="button" className="icon-btn header-search mobile-only" aria-label="Search">
+            <IconSearch size={19} />
           </button>
+          <span className="profile-orbit" aria-label="Profile">AS</span>
         </div>
       </div>
 
