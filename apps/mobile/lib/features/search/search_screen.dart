@@ -8,6 +8,7 @@ import '../../core/errors.dart';
 import '../../data/models.dart';
 import '../../shared/countdown.dart';
 import '../../shared/widgets.dart';
+import '../../sports/catalog.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key, this.initialTab = 'all'});
@@ -46,19 +47,35 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       _busy = true;
       _error = null;
     });
-    final api = ref.read(apiClientProvider);
+    final catalog = ref.read(catalogClientProvider);
     try {
       List<CatalogTitle> movies = const [];
       List<CatalogTitle> series = const [];
       List<SportEvent> sports = const [];
       if (_tab == 'all' || _tab == 'movies') {
-        movies = (await api.searchCatalogMovies(q)).items;
+        movies = await catalog.searchMovies(q);
       }
       if (_tab == 'all' || _tab == 'series') {
-        series = (await api.searchCatalogSeries(q)).items;
+        series = await catalog.searchSeries(q);
       }
       if (_tab == 'all' || _tab == 'sports') {
-        sports = (await api.searchSportsEvents(q: q, team: q)).events;
+        try {
+          final catalog = await ref.read(sportsCatalogProvider.future);
+          final needle = q.toLowerCase();
+          sports = catalog.events.where((event) {
+            final hay = [
+              event.displayTitle,
+              event.title,
+              event.homeTeam ?? '',
+              event.awayTeam ?? '',
+              event.competition,
+              event.sport,
+            ].join(' ').toLowerCase();
+            return hay.contains(needle);
+          }).toList();
+        } catch (e) {
+          if (_tab == 'sports') rethrow;
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -121,7 +138,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Text(_error!, style: const TextStyle(color: AppColors.danger)),
+              child: Text(
+                _error!,
+                style: const TextStyle(color: AppColors.danger),
+              ),
             ),
           Expanded(
             child: ListView(
@@ -152,7 +172,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   ..._sports.map(
                     (e) => ListTile(
                       title: Text(e.displayTitle),
-                      subtitle: Text('${e.competition} · ${e.status}'),
+                      subtitle: Text(
+                        '${e.competition} · ${e.status} · ${e.feedsLabel}',
+                      ),
                       trailing: SizedBox(
                         width: 110,
                         child: MatchCountdownLabel(
@@ -161,9 +183,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                           style: const TextStyle(fontSize: 11),
                         ),
                       ),
-                      onTap: e.isPlayable
-                          ? () => context.push('/sports/${e.id}')
-                          : null,
+                      onTap: () => context.push('/sports/${e.id}'),
                     ),
                   ),
                 ],

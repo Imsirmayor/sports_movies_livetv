@@ -111,6 +111,7 @@ class CatalogStreamOption {
     required this.sizeBytes,
     required this.seeders,
     required this.language,
+    this.url = '',
     this.cached = false,
     this.locallyCached = false,
   });
@@ -123,6 +124,9 @@ class CatalogStreamOption {
   final num sizeBytes;
   final int seeders;
   final String language;
+
+  /// Direct file URL from Torrentio. Stays in the app and is not shown in the UI.
+  final String url;
   final bool cached;
   final bool locallyCached;
 
@@ -136,6 +140,7 @@ class CatalogStreamOption {
       sizeBytes: json['sizeBytes'] as num? ?? 0,
       seeders: (json['seeders'] as num?)?.toInt() ?? 0,
       language: json['language'] as String? ?? '',
+      url: json['url'] as String? ?? '',
       cached: json['cached'] as bool? ?? false,
       locallyCached: json['locallyCached'] as bool? ?? false,
     );
@@ -259,6 +264,7 @@ class SportEvent {
     required this.provider,
     required this.streamAvailability,
     this.embedUrl,
+    this.sourceCount = 1,
   });
 
   final String id;
@@ -275,6 +281,11 @@ class SportEvent {
   final String streamAvailability;
   final String? embedUrl;
 
+  /// How many listing pages had this same match link.
+  final int sourceCount;
+
+  String get feedsLabel => sourceCount == 1 ? '1 feed' : '$sourceCount feeds';
+
   bool get isPlayable =>
       streamAvailability == 'available' || streamAvailability == 'fixture';
 
@@ -283,15 +294,14 @@ class SportEvent {
   String get displayTitle {
     final home = homeTeam?.trim();
     final away = awayTeam?.trim();
-    if (home != null &&
-        home.isNotEmpty &&
-        away != null &&
-        away.isNotEmpty) {
+    if (home != null && home.isNotEmpty && away != null && away.isNotEmpty) {
       return '$home vs $away';
     }
     // Normalize titles that already use a vs-like separator.
-    final vsMatch = RegExp(r'\s+v(?:ersus)?\.?\s+', caseSensitive: false)
-        .firstMatch(title);
+    final vsMatch = RegExp(
+      r'\s+v(?:ersus)?\.?\s+',
+      caseSensitive: false,
+    ).firstMatch(title);
     if (vsMatch != null) {
       final left = title.substring(0, vsMatch.start).trim();
       final right = title.substring(vsMatch.end).trim();
@@ -313,8 +323,10 @@ class SportEvent {
       status: json['status'] as String? ?? 'unknown',
       score: SportEventScore.fromJson(json['score'] as Map<String, dynamic>?),
       provider: json['provider'] as String? ?? '',
-      streamAvailability: json['streamAvailability'] as String? ?? 'unavailable',
+      streamAvailability:
+          json['streamAvailability'] as String? ?? 'unavailable',
       embedUrl: json['embedUrl'] as String?,
+      sourceCount: (json['sourceCount'] as num?)?.toInt() ?? 1,
     );
   }
 }

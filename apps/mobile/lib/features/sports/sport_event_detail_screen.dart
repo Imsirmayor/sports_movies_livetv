@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../app/providers.dart';
 import '../../app/theme.dart';
 import '../../core/errors.dart';
 import '../../data/models.dart';
 import '../../shared/countdown.dart';
 import '../../shared/widgets.dart';
+import '../../sports/catalog.dart';
+import '../../sports/stream_resolver.dart';
 import '../player/player_screen.dart';
 
 class SportEventDetailScreen extends ConsumerStatefulWidget {
@@ -23,9 +24,10 @@ class SportEventDetailScreen extends ConsumerStatefulWidget {
 class _SportEventDetailScreenState
     extends ConsumerState<SportEventDetailScreen> {
   SportEvent? _event;
+  List<SportFeed> _feeds = const [];
   String? _error;
   bool _loading = true;
-  bool _starting = false;
+  String? _openingUrl;
   int _tab = 0;
 
   @override
@@ -40,11 +42,17 @@ class _SportEventDetailScreenState
       _error = null;
     });
     try {
-      final event =
-          await ref.read(apiClientProvider).getSportEvent(widget.eventId);
+      final catalog = await ref.read(sportsCatalogProvider.future);
+      final event = catalog.find(widget.eventId);
+      if (event == null) {
+        throw SportsScrapeException(
+          'This event is not in the current listings.',
+        );
+      }
       if (!mounted) return;
       setState(() {
         _event = event;
+        _feeds = catalog.feedsFor(event.id);
         _loading = false;
       });
     } catch (e) {
@@ -56,29 +64,32 @@ class _SportEventDetailScreenState
     }
   }
 
-  Future<void> _watch() async {
+  Future<void> _watch(SportFeed feed) async {
     final event = _event;
-    if (event == null || !event.isPlayable) return;
-    setState(() => _starting = true);
+    if (event == null || _openingUrl != null) return;
+    setState(() => _openingUrl = feed.eventUrl);
     try {
-      final session =
-          await ref.read(apiClientProvider).startSportsPlayback(event.id);
+      final resolved = await resolveSportFeed(
+        feed,
+        ref.read(htmlClientProvider).getText,
+      );
       if (!mounted) return;
       await context.push(
         '/player',
         extra: PlayerArgs(
-          sessionId: session.sessionId,
-          title: event.displayTitle,
+          streamUrl: resolved.streamUrl,
+          httpHeaders: resolved.headers,
+          title: '${event.displayTitle} · ${feed.siteName}',
           isLive: true,
         ),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(userFacingError(e))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(userFacingError(e))));
     } finally {
-      if (mounted) setState(() => _starting = false);
+      if (mounted) setState(() => _openingUrl = null);
     }
   }
 
@@ -103,9 +114,9 @@ class _SportEventDetailScreenState
         ),
         title: Text(
           'Live Match Player',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
         ),
         actions: [
           IconButton(
@@ -129,16 +140,16 @@ class _SportEventDetailScreenState
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? StateMessage(
-                  title: 'Event unavailable',
-                  message: _error,
-                  tone: StateTone.error,
-                  action: FilledButton(
-                    onPressed: _load,
-                    child: const Text('Retry'),
-                  ),
-                )
-              : _buildBody(_event!),
+          ? StateMessage(
+              title: 'Event unavailable',
+              message: _error,
+              tone: StateTone.error,
+              action: FilledButton(
+                onPressed: _load,
+                child: const Text('Retry'),
+              ),
+            )
+          : _buildBody(_event!),
     );
   }
 
@@ -182,10 +193,7 @@ class _SportEventDetailScreenState
                   const Positioned(
                     top: 12,
                     right: 12,
-                    child: SoftBadge(
-                      label: 'HD STREAM',
-                      color: Colors.black54,
-                    ),
+                    child: SoftBadge(label: 'HD STREAM', color: Colors.black54),
                   ),
                   Center(
                     child: Column(
@@ -235,7 +243,7 @@ class _SportEventDetailScreenState
                     ),
                   ),
                   SoftBadge(
-                    label: event.streamAvailability.toUpperCase(),
+                    label: event.feedsLabel.toUpperCase(),
                     color: AppColors.bgElevated,
                     textColor: AppColors.gold,
                   ),
@@ -308,57 +316,67 @@ class _SportEventDetailScreenState
         ),
         const SizedBox(height: 14),
 
-        if (event.isPlayable)
-          Row(
-            children: [
-              Expanded(
-                child: PulsePrimaryButton(
-                  label: _starting ? 'Starting…' : 'Watch Live HD',
-                  onPressed: _starting ? null : _watch,
-                  expand: true,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: AppColors.bgElevated,
-                  borderRadius: BorderRadius.circular(AppRadii.sm),
-                ),
-                child: IconButton(
-                  onPressed: () {},
-                  icon: const Icon(Icons.videocam_outlined),
-                ),
-              ),
-            ],
-          )
-        else if (!event.isLive)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              MatchCountdownLabel(
-                startTime: event.startTime,
-                status: event.status,
-                pill: true,
-                expand: true,
-                style: const TextStyle(fontSize: 16),
-                onElapsed: _load,
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'Stream unlocks at kickoff. Stay on Sports — the countdown updates live.',
-                style: TextStyle(color: AppColors.textMuted, fontSize: 13),
-              ),
-            ],
-          )
-        else
+        if (_feeds.isEmpty)
           const StateMessage(
             title: 'No playable stream',
-            message: 'This event is schedule-only or requires a provider.',
+            message: 'This match was not found on any enabled listing page.',
             tone: StateTone.warn,
             icon: Icons.lock_outline,
+          )
+        else ...[
+          if (!live) ...[
+            MatchCountdownLabel(
+              startTime: event.startTime,
+              status: event.status,
+              pill: true,
+              expand: true,
+              style: const TextStyle(fontSize: 16),
+              onElapsed: _load,
+            ),
+            const SizedBox(height: 10),
+          ],
+          Text(
+            'Feeds',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
           ),
+          const SizedBox(height: 4),
+          Text(
+            'Each row is this match on one listing page. Play scrapes that page for its embed.',
+            style: TextStyle(
+              color: AppColors.textMuted.withValues(alpha: 0.95),
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final feed in _feeds)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Material(
+                color: AppColors.bgPanel,
+                borderRadius: BorderRadius.circular(AppRadii.card),
+                child: ListTile(
+                  title: Text(
+                    feed.siteName,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Text(
+                    '${feed.hostLabel} · ${feed.league}',
+                    style: const TextStyle(color: AppColors.textMuted),
+                  ),
+                  trailing: _openingUrl == feed.eventUrl
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.play_circle_fill_rounded),
+                  onTap: _openingUrl == null ? () => _watch(feed) : null,
+                ),
+              ),
+            ),
+        ],
 
         const SizedBox(height: 18),
         PulsePillBar(
@@ -372,7 +390,7 @@ class _SportEventDetailScreenState
             icon: Icons.sports_soccer,
             title: event.displayTitle,
             body:
-                '${event.competition} · ${event.sport}\nStatus: ${event.status}\nStream: ${event.streamAvailability}',
+                '${event.competition} · ${event.sport}\nStatus: ${event.status}\nFeeds: ${event.feedsLabel}',
           )
         else if (_tab == 1)
           _infoCard(
@@ -400,10 +418,7 @@ class _SportEventDetailScreenState
           backgroundColor: AppColors.bgElevated,
           child: Text(
             abbr,
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 12,
-            ),
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
           ),
         ),
         const SizedBox(height: 8),
@@ -448,10 +463,7 @@ class _SportEventDetailScreenState
           const SizedBox(height: 10),
           Text(
             body,
-            style: const TextStyle(
-              color: AppColors.textMuted,
-              height: 1.45,
-            ),
+            style: const TextStyle(color: AppColors.textMuted, height: 1.45),
           ),
         ],
       ),

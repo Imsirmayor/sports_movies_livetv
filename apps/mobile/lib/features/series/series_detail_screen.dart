@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/providers.dart';
 import '../../app/theme.dart';
 import '../../core/errors.dart';
+import '../../data/catalog_client.dart';
 import '../../data/models.dart';
 import '../../shared/widgets.dart';
 import '../player/player_screen.dart';
@@ -29,6 +30,7 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
   int? _season;
   SeriesEpisode? _episode;
   CatalogStreamsResponse? _streams;
+  String? _streamError;
   bool _loadingStreams = false;
   bool _starting = false;
   int? _selectedStream;
@@ -46,7 +48,7 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
     });
     try {
       final meta =
-          await ref.read(apiClientProvider).getCatalogSeries(widget.imdbId);
+          await ref.read(catalogClientProvider).getSeries(widget.imdbId);
       if (!mounted) return;
       final season = meta.seasons.isNotEmpty ? meta.seasons.first : null;
       final episode = season == null
@@ -71,11 +73,12 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
   Future<void> _loadStreams(SeriesEpisode episode) async {
     setState(() {
       _loadingStreams = true;
+      _streamError = null;
       _streams = null;
       _selectedStream = null;
     });
     try {
-      final streams = await ref.read(apiClientProvider).listCatalogSeriesStreams(
+      final streams = await ref.read(catalogClientProvider).listSeriesStreams(
             imdbId: widget.imdbId,
             season: episode.season,
             episode: episode.episode,
@@ -91,9 +94,7 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
       if (!mounted) return;
       setState(() {
         _loadingStreams = false;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(userFacingError(e))),
-        );
+        _streamError = userFacingError(e);
       });
     }
   }
@@ -115,11 +116,13 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
   Future<void> _preloadNext(SeriesEpisode episode) async {
     final next = _nextEpisodeAfter(episode);
     if (next == null) return;
-    await ref.read(apiClientProvider).warmCatalogSeries(
-          imdbId: widget.imdbId,
-          season: next.season,
-          episode: next.episode,
-        );
+    try {
+      await ref.read(catalogClientProvider).listSeriesStreams(
+            imdbId: widget.imdbId,
+            season: next.season,
+            episode: next.episode,
+          );
+    } catch (_) {}
   }
 
   Future<void> _play() async {
@@ -131,13 +134,14 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
     // Kick next-episode warm while this session starts.
     unawaited(_preloadNext(episode));
     try {
-      final session =
-          await ref.read(apiClientProvider).startCatalogSeriesPlayback(
-                imdbId: widget.imdbId,
-                season: episode.season,
-                episode: episode.episode,
-                streamIndex: index,
-              );
+      final catalog = ref.read(catalogClientProvider);
+      final url = await catalog.resolveSeriesStreamUrl(
+        imdbId: widget.imdbId,
+        season: episode.season,
+        episode: episode.episode,
+        streamIndex: index,
+      );
+      await catalog.waitForPlayable(url);
       if (!mounted) return;
       final progressId =
           'series:${widget.imdbId}:S${episode.season}E${episode.episode}';
@@ -147,7 +151,8 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
       await context.push(
         '/player',
         extra: PlayerArgs(
-          sessionId: session.sessionId,
+          streamUrl: url,
+          httpHeaders: CatalogClient.playbackHeaders,
           title: '${meta.name} · S${episode.season}E${episode.episode}',
           progressId: progressId,
           progressRoute: '/series/${widget.imdbId}',
@@ -317,8 +322,14 @@ class _SeriesDetailScreenState extends ConsumerState<SeriesDetailScreen> {
         else if (_episode == null)
           const Text('Select an episode', style: TextStyle(color: AppColors.textMuted))
         else if (streams.isEmpty)
-          const Text('No streams for this episode',
-              style: TextStyle(color: AppColors.textMuted))
+          Text(
+            _streamError ?? 'No streams for this episode',
+            style: TextStyle(
+              color: _streamError == null
+                  ? AppColors.textMuted
+                  : AppColors.danger,
+            ),
+          )
         else ...[
           ...streams.map((s) {
             final selected = _selectedStream == s.index;
