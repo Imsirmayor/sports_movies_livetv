@@ -1,3 +1,12 @@
+class SportsScrapeException implements Exception {
+  SportsScrapeException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 class ApiException implements Exception {
   ApiException({
     required this.message,
@@ -16,6 +25,7 @@ class ApiException implements Exception {
 }
 
 String userFacingError(Object error) {
+  if (error is SportsScrapeException) return error.message;
   if (error is ApiException) return error.message;
   final text = error.toString();
   if (text.contains('SocketException') || text.contains('Connection refused')) {

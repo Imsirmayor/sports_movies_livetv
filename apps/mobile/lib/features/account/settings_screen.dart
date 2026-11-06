@@ -14,6 +14,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late final TextEditingController _base;
   late final TextEditingController _token;
+  late final TextEditingController _addon;
   bool _saving = false;
 
   @override
@@ -22,12 +23,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final cfg = ref.read(appConfigProvider);
     _base = TextEditingController(text: cfg.apiBaseUrl);
     _token = TextEditingController(text: cfg.apiToken);
+    _addon = TextEditingController(text: cfg.stremioAddonUrl);
   }
 
   @override
   void dispose() {
     _base.dispose();
     _token.dispose();
+    _addon.dispose();
     super.dispose();
   }
 
@@ -37,11 +40,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       await ref.read(appConfigProvider.notifier).update(
             apiBaseUrl: _base.text.trim(),
             apiToken: _token.text.trim(),
+            stremioAddonUrl: _addon.text.trim(),
           );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Saved API settings')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Saved settings')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -56,15 +60,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         children: [
           Text(
             'API connection',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           const Text(
-            'The mobile app talks to the same Frankenstein REST API as the web BFF. '
-            'Use 10.0.2.2 for the Android emulator host loopback. '
-            'On a physical device, use your computer\'s LAN IP and set API_HOST=0.0.0.0.',
+            'Sports and ads still use the Frankenstein API. '
+            'Movies and series load titles from Cinemeta on the phone and do not need it. '
+            'Use 10.0.2.2 for the Android emulator host loopback.',
             style: TextStyle(color: AppColors.textMuted),
           ),
           const SizedBox(height: 16),
@@ -86,6 +90,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             obscureText: true,
             autocorrect: false,
+          ),
+          const SizedBox(height: 28),
+          Text(
+            'Movies and series',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Posters, titles, and episodes come from Cinemeta. '
+            'Paste the full Torrentio addon URL (the one that includes RealDebrid) '
+            'so the app can fetch a direct video link. It is stored on this device only.',
+            style: TextStyle(color: AppColors.textMuted),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _addon,
+            decoration: const InputDecoration(
+              labelText: 'Torrentio addon URL',
+              hintText: 'https://torrentio.strem.fun/realdebrid=…',
+            ),
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+            obscureText: true,
           ),
           const SizedBox(height: 16),
           FilledButton(

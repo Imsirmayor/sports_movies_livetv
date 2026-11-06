@@ -13,11 +13,14 @@ import '../../data/api_client.dart';
 import '../../data/continue_watching.dart';
 import '../../data/models.dart';
 import '../../shared/widgets.dart';
+import '../../sports/hls_proxy.dart';
 import '../ads/preroll.dart';
 
 class PlayerArgs {
   const PlayerArgs({
-    required this.sessionId,
+    this.sessionId,
+    this.streamUrl,
+    this.httpHeaders = const {},
     required this.title,
     this.progressId,
     this.progressRoute,
@@ -26,7 +29,12 @@ class PlayerArgs {
     this.isLive = false,
   });
 
-  final String sessionId;
+  /// API playback session. Empty when [streamUrl] is played directly.
+  final String? sessionId;
+
+  /// Direct HLS playlist. Sports feeds use this and skip the API.
+  final String? streamUrl;
+  final Map<String, String> httpHeaders;
   final String title;
   final String? progressId;
   final String? progressRoute;
@@ -51,6 +59,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   PlaybackSession? _session;
   String? _error;
   bool _stopping = false;
+  LocalHlsProxy? _hlsProxy;
   late final FrankensteinApi _api;
 
   @override
@@ -65,15 +74,31 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _bootstrap();
   }
 
+  bool get _direct =>
+      widget.args.streamUrl != null && widget.args.streamUrl!.isNotEmpty;
+
   Future<void> _bootstrap() async {
+    if (_direct) {
+      try {
+        await _openPlayer(widget.args.streamUrl!, widget.args.httpHeaders);
+      } catch (e) {
+        if (mounted) setState(() => _error = userFacingError(e));
+      }
+      return;
+    }
+    final sessionId = widget.args.sessionId;
+    if (sessionId == null || sessionId.isEmpty) {
+      setState(() => _error = 'Missing player session');
+      return;
+    }
     try {
-      var session = await _api.getPlayback(widget.args.sessionId);
+      var session = await _api.getPlayback(sessionId);
       setState(() => _session = session);
 
       if (session.isStarting) {
         _poll = Timer.periodic(const Duration(milliseconds: 800), (_) async {
           try {
-            session = await _api.getPlayback(widget.args.sessionId);
+            session = await _api.getPlayback(sessionId);
             if (!mounted) return;
             setState(() => _session = session);
             if (session.isReady) {
@@ -101,25 +126,40 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Future<void> _attachPlayer(PlaybackSession session) async {
-    if (mounted) {
-      await showPrerollAd(
-        context: context,
-        api: _api,
-        contentType: widget.args.isLive ? 'sport' : 'vod',
-        contentId: widget.args.sessionId,
-      );
-    }
-    if (!mounted) return;
-
     final url = _api.absolutePlaylistUrl(session.playlistUrl);
     if (url == null) {
       setState(() => _error = 'No playlist URL');
       return;
     }
+    await _openPlayer(url, _api.playlistHttpHeaders(url));
+  }
+
+  Future<void> _openPlayer(String url, Map<String, String> headers) async {
+    if (!widget.args.isLive && mounted) {
+      await showPrerollAd(
+        context: context,
+        api: _api,
+        contentType: 'vod',
+        contentId: widget.args.progressId ?? widget.args.sessionId,
+      );
+    }
+    if (!mounted) return;
+
+    var playUrl = url;
+    var playHeaders = headers;
+    if (widget.args.isLive) {
+      await _hlsProxy?.close();
+      final proxy = LocalHlsProxy(upstream: url, headers: headers);
+      playUrl = await proxy.start();
+      playHeaders = const {};
+      _hlsProxy = proxy;
+    }
+    if (!mounted) return;
+
     final controller = VideoPlayerController.networkUrl(
-      Uri.parse(url),
-      // Local API playlists need Bearer; public R2 CDN URLs must not.
-      httpHeaders: _api.playlistHttpHeaders(url),
+      Uri.parse(playUrl),
+      formatHint: widget.args.isLive ? VideoFormat.hls : null,
+      httpHeaders: playHeaders,
     );
     await controller.initialize();
     if (widget.args.startAtSeconds > 0 && !widget.args.isLive) {
@@ -160,7 +200,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final dur = v.value.duration.inMilliseconds / 1000.0;
     if (pos < 15) return;
     unawaited(
-      ref.read(continueWatchingProvider.notifier).save(
+      ref
+          .read(continueWatchingProvider.notifier)
+          .save(
             ContinueWatchEntry(
               id: progressId,
               title: widget.args.title,
@@ -179,9 +221,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _stopping = true;
     _poll?.cancel();
     _video?.removeListener(_onProgress);
-    try {
-      await _api.stopPlayback(widget.args.sessionId);
-    } catch (_) {}
+    final sessionId = widget.args.sessionId;
+    if (sessionId != null && sessionId.isNotEmpty) {
+      try {
+        await _api.stopPlayback(sessionId);
+      } catch (_) {}
+    }
     if (mounted) Navigator.of(context).maybePop();
   }
 
@@ -191,13 +236,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _video?.removeListener(_onProgress);
     _chewie?.dispose();
     _video?.dispose();
+    unawaited(_hlsProxy?.close());
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     final sessionId = widget.args.sessionId;
-    unawaited(() async {
-      try {
-        await _api.stopPlayback(sessionId);
-      } catch (_) {}
-    }());
+    if (sessionId != null && sessionId.isNotEmpty) {
+      unawaited(() async {
+        try {
+          await _api.stopPlayback(sessionId);
+        } catch (_) {}
+      }());
+    }
     super.dispose();
   }
 
@@ -218,7 +266,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 widget.args.isLive ? 'Live Match Player' : widget.args.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
               ),
             ),
           ],
@@ -301,10 +352,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (_chewie != null) {
       return Center(child: Chewie(controller: _chewie!));
     }
+    if (_direct) {
+      return StateMessage(
+        title: widget.args.isLive ? 'Opening feed…' : 'Starting video…',
+        message: widget.args.isLive
+            ? 'Fetching the embed and starting the player.'
+            : 'Opening the video file.',
+        icon: Icons.hourglass_top,
+      );
+    }
     final status = _session?.status ?? 'starting';
     return StateMessage(
       title: 'Preparing stream…',
-      message: 'Session $status. Live remux can take up to a couple of minutes.',
+      message:
+          'Session $status. Live remux can take up to a couple of minutes.',
       icon: Icons.hourglass_top,
     );
   }

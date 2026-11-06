@@ -9,8 +9,8 @@ import '../../core/errors.dart';
 import '../../data/models.dart';
 import '../../shared/widgets.dart';
 
-final _moviesProvider = FutureProvider.autoDispose<CatalogListResponse>((ref) {
-  return ref.watch(apiClientProvider).listCatalogMovies();
+final _moviesProvider = FutureProvider.autoDispose<List<CatalogTitle>>((ref) {
+  return ref.watch(catalogClientProvider).topMovies();
 });
 
 class MoviesScreen extends ConsumerStatefulWidget {
@@ -47,11 +47,11 @@ class _MoviesScreenState extends ConsumerState<MoviesScreen> {
       _searchError = null;
     });
     try {
-      final res =
-          await ref.read(apiClientProvider).searchCatalogMovies(query);
+      final results =
+          await ref.read(catalogClientProvider).searchMovies(query);
       if (!mounted) return;
       setState(() {
-        _searchResults = res.items;
+        _searchResults = results;
         _searching = false;
       });
     } catch (e) {
@@ -66,7 +66,7 @@ class _MoviesScreenState extends ConsumerState<MoviesScreen> {
   @override
   Widget build(BuildContext context) {
     final listAsync = ref.watch(_moviesProvider);
-    final items = _searchResults ?? listAsync.asData?.value.items ?? const [];
+    final items = _searchResults ?? listAsync.asData?.value ?? const [];
     final hero = items.isNotEmpty ? items.first : null;
 
     return Scaffold(
@@ -154,20 +154,7 @@ class _MoviesScreenState extends ConsumerState<MoviesScreen> {
                           ),
                         ],
                       ),
-                data: (res) {
-                  if (!res.providerConfigured && items.isEmpty) {
-                    return ListView(
-                      children: const [
-                        StateMessage(
-                          title: 'Catalog not configured',
-                          message:
-                              'Set STREMIO_ADDON_URL on the API to enable movies.',
-                          tone: StateTone.warn,
-                          icon: Icons.cloud_off,
-                        ),
-                      ],
-                    );
-                  }
+                data: (_) {
                   if (items.isEmpty) {
                     return ListView(
                       children: const [
