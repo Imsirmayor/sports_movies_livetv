@@ -12,28 +12,31 @@ import '../../data/continue_watching.dart';
 import '../../data/models.dart';
 import '../../shared/countdown.dart';
 import '../../shared/widgets.dart';
+import '../../sports/catalog.dart';
 
 final _homeBootstrapProvider = FutureProvider<_HomeData>((ref) async {
-  final api = ref.watch(apiClientProvider);
+  final catalog = ref.watch(catalogClientProvider);
+  final sportsFuture = ref.watch(sportsCatalogProvider.future);
   List<SportEvent> live = const [];
   List<SportEvent> upcoming = const [];
   List<CatalogTitle> movies = const [];
   List<CatalogTitle> series = const [];
 
-  if (ref.read(appConfigProvider).hasToken) {
-    try {
-      live = (await api.searchSportsEvents(status: 'live')).events;
-    } catch (_) {}
-    try {
-      upcoming = (await api.searchSportsEvents(status: 'upcoming')).events;
-    } catch (_) {}
-    try {
-      movies = (await api.listCatalogMovies()).items;
-    } catch (_) {}
-    try {
-      series = (await api.listCatalogSeries()).items;
-    } catch (_) {}
-  }
+  final moviesFuture = catalog.topMovies();
+  final seriesFuture = catalog.topSeries();
+
+  try {
+    final sports = await sportsFuture;
+    live = sports.live;
+    upcoming = sports.upcoming;
+  } catch (_) {}
+
+  try {
+    movies = await moviesFuture;
+  } catch (_) {}
+  try {
+    series = await seriesFuture;
+  } catch (_) {}
 
   return _HomeData(
     live: live,
@@ -190,12 +193,9 @@ class _HomeBody extends ConsumerWidget {
           slides: slides,
           onAddToList: (id, title, type, route) async {
             final wasIn = ref.read(myListProvider.notifier).contains(id);
-            await ref.read(myListProvider.notifier).toggle(
-                  id: id,
-                  title: title,
-                  type: type,
-                  route: route,
-                );
+            await ref
+                .read(myListProvider.notifier)
+                .toggle(id: id, title: title, type: type, route: route);
             if (!context.mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -318,14 +318,11 @@ class _HomeBody extends ConsumerWidget {
 }
 
 class _HeroBanner extends StatefulWidget {
-  const _HeroBanner({
-    required this.slides,
-    required this.onAddToList,
-  });
+  const _HeroBanner({required this.slides, required this.onAddToList});
 
   final List<_HeroSlide> slides;
   final void Function(String id, String title, String type, String route)
-      onAddToList;
+  onAddToList;
 
   @override
   State<_HeroBanner> createState() => _HeroBannerState();
@@ -409,14 +406,14 @@ class _HeroBannerState extends State<_HeroBanner> {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: switch (slide) {
                     _HeroSport(:final event) => _HeroSportSlide(
-                        event: event,
-                        onAddToList: () => widget.onAddToList(
-                          event.id,
-                          event.displayTitle,
-                          'sport',
-                          '/sports/${event.id}',
-                        ),
+                      event: event,
+                      onAddToList: () => widget.onAddToList(
+                        event.id,
+                        event.displayTitle,
+                        'sport',
+                        '/sports/${event.id}',
                       ),
+                    ),
                     _HeroCatalog(:final item, :final isSeries) =>
                       _HeroCatalogSlide(
                         title: item,
@@ -487,13 +484,13 @@ class _EmptyHero extends StatelessWidget {
             const Spacer(),
             Text(
               'Your next stream starts here',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 8),
             const Text(
-              'Live sports, cinema, and series from your configured API.',
+              'Live sports are scraped in the app. Cinema and series use the API.',
               style: TextStyle(color: AppColors.textMuted),
             ),
             const SizedBox(height: 16),
@@ -523,10 +520,7 @@ class _EmptyHero extends StatelessWidget {
 }
 
 class _HeroSportSlide extends StatelessWidget {
-  const _HeroSportSlide({
-    required this.event,
-    required this.onAddToList,
-  });
+  const _HeroSportSlide({required this.event, required this.onAddToList});
 
   final SportEvent event;
   final VoidCallback onAddToList;
@@ -624,10 +618,10 @@ class _HeroSportSlide extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        height: 1.1,
-                        letterSpacing: 0.3,
-                      ),
+                    fontWeight: FontWeight.w900,
+                    height: 1.1,
+                    letterSpacing: 0.3,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 MatchCountdownLabel(
@@ -656,8 +650,7 @@ class _HeroSportSlide extends StatelessWidget {
                         label: event.isPlayable
                             ? 'Watch Live Stream'
                             : 'Open Event',
-                        onPressed: () =>
-                            context.push('/sports/${event.id}'),
+                        onPressed: () => context.push('/sports/${event.id}'),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -754,9 +747,9 @@ class _HeroCatalogSlide extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        height: 1.1,
-                      ),
+                    fontWeight: FontWeight.w900,
+                    height: 1.1,
+                  ),
                 ),
                 if (title.year != null) ...[
                   const SizedBox(height: 6),
@@ -855,7 +848,7 @@ class _LiveSportCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        event.competition.toUpperCase(),
+                        '${event.competition.toUpperCase()} · ${event.feedsLabel}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -894,8 +887,7 @@ class _LiveSportCard extends StatelessWidget {
                       SizedBox(
                         width: double.infinity,
                         child: FilledButton(
-                          onPressed: () =>
-                              context.push('/sports/${event.id}'),
+                          onPressed: () => context.push('/sports/${event.id}'),
                           style: FilledButton.styleFrom(
                             backgroundColor: AppColors.accent,
                             minimumSize: const Size(0, 36),
@@ -960,9 +952,7 @@ class _ContinueCard extends StatelessWidget {
                             imageUrl: entry.poster!,
                             fit: BoxFit.cover,
                           ),
-                    Container(
-                      color: Colors.black.withValues(alpha: 0.25),
-                    ),
+                    Container(color: Colors.black.withValues(alpha: 0.25)),
                     const Center(
                       child: CircleAvatar(
                         backgroundColor: AppColors.accent,
@@ -1125,15 +1115,17 @@ class _ScheduleRow extends StatelessWidget {
         color: AppColors.bgPanel,
         borderRadius: BorderRadius.circular(AppRadii.sm),
         child: ListTile(
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 4,
+          ),
           onTap: () => context.push('/sports/${event.id}'),
           title: Text(
             event.displayTitle,
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
           ),
           subtitle: Text(
-            '${event.competition} · ${event.sport}',
+            '${event.competition} · ${event.sport} · ${event.feedsLabel}',
             style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
           ),
           trailing: Row(

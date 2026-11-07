@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/config.dart';
 import '../data/api_client.dart';
+import '../data/catalog_client.dart';
 import '../data/continue_watching.dart';
 import '../data/settings_store.dart';
 
@@ -18,8 +19,9 @@ final settingsStoreProvider = Provider<SettingsStore>((ref) {
   );
 });
 
-final appConfigProvider =
-    NotifierProvider<AppConfigNotifier, AppConfig>(AppConfigNotifier.new);
+final appConfigProvider = NotifierProvider<AppConfigNotifier, AppConfig>(
+  AppConfigNotifier.new,
+);
 
 class AppConfigNotifier extends Notifier<AppConfig> {
   @override
@@ -33,15 +35,32 @@ class AppConfigNotifier extends Notifier<AppConfig> {
   Future<void> update({
     required String apiBaseUrl,
     required String apiToken,
+    required String stremioAddonUrl,
   }) async {
     final store = ref.read(settingsStoreProvider);
-    await store.save(apiBaseUrl: apiBaseUrl, apiToken: apiToken);
-    state = state.copyWith(apiBaseUrl: apiBaseUrl, apiToken: apiToken);
+    await store.save(
+      apiBaseUrl: apiBaseUrl,
+      apiToken: apiToken,
+      stremioAddonUrl: stremioAddonUrl,
+    );
+    state = state.copyWith(
+      apiBaseUrl: apiBaseUrl,
+      apiToken: apiToken,
+      stremioAddonUrl: stremioAddonUrl,
+    );
   }
 }
 
 final apiClientProvider = Provider<FrankensteinApi>((ref) {
   return FrankensteinApi(ref.watch(appConfigProvider));
+});
+
+final catalogClientProvider = Provider<CatalogClient>((ref) {
+  final config = ref.watch(appConfigProvider);
+  return CatalogClient(
+    stremioAddonUrl: config.stremioAddonUrl,
+    maxResolution: config.maxResolution,
+  );
 });
 
 final continueWatchingStoreProvider = Provider<ContinueWatchingStore>((ref) {
@@ -54,8 +73,8 @@ final myListStoreProvider = Provider<MyListStore>((ref) {
 
 final continueWatchingProvider =
     NotifierProvider<ContinueWatchingNotifier, List<ContinueWatchEntry>>(
-  ContinueWatchingNotifier.new,
-);
+      ContinueWatchingNotifier.new,
+    );
 
 class ContinueWatchingNotifier extends Notifier<List<ContinueWatchEntry>> {
   @override
@@ -75,8 +94,8 @@ class ContinueWatchingNotifier extends Notifier<List<ContinueWatchEntry>> {
 
 final myListProvider =
     NotifierProvider<MyListNotifier, List<Map<String, dynamic>>>(
-  MyListNotifier.new,
-);
+      MyListNotifier.new,
+    );
 
 class MyListNotifier extends Notifier<List<Map<String, dynamic>>> {
   @override
@@ -95,13 +114,9 @@ class MyListNotifier extends Notifier<List<Map<String, dynamic>>> {
     String? poster,
     required String route,
   }) async {
-    await ref.read(myListStoreProvider).toggle(
-          id: id,
-          title: title,
-          type: type,
-          poster: poster,
-          route: route,
-        );
+    await ref
+        .read(myListStoreProvider)
+        .toggle(id: id, title: title, type: type, poster: poster, route: route);
     refresh();
   }
 

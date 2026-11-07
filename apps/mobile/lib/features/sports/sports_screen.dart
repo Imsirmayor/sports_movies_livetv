@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../app/providers.dart';
+import '../../sports/catalog.dart';
 import '../../app/theme.dart';
 import '../../core/errors.dart';
 import '../../data/models.dart';
@@ -20,24 +20,8 @@ class _SportsFilterNotifier extends Notifier<String> {
   void set(String value) => state = value;
 }
 
-final _sportsEventsProvider = FutureProvider.autoDispose<SportEventsResponse>((
-  ref,
-) async {
-  final api = ref.watch(apiClientProvider);
-  final filter = ref.watch(_sportsFilterProvider);
-  return api.searchSportsEvents(
-    status: filter == 'live'
-        ? 'live'
-        : filter == 'upcoming'
-            ? 'upcoming'
-            : null,
-  );
-});
-
-final _sportsMetaProvider = FutureProvider.autoDispose<SportsListResponse>((
-  ref,
-) {
-  return ref.watch(apiClientProvider).listSports();
+final _sportsEventsProvider = FutureProvider.autoDispose<SportsCatalog>((ref) {
+  return ref.watch(sportsCatalogProvider.future);
 });
 
 class SportsScreen extends ConsumerStatefulWidget {
@@ -54,8 +38,7 @@ class _SportsScreenState extends ConsumerState<SportsScreen> {
   Widget build(BuildContext context) {
     final filter = ref.watch(_sportsFilterProvider);
     final eventsAsync = ref.watch(_sportsEventsProvider);
-    final metaAsync = ref.watch(_sportsMetaProvider);
-    final sports = metaAsync.asData?.value.sports ?? const <String>[];
+    final sports = eventsAsync.asData?.value.sports ?? const <String>[];
     final sportLabels = ['All Sports', ...sports.map(_sportLabel)];
 
     return Scaffold(
@@ -90,16 +73,18 @@ class _SportsScreenState extends ConsumerState<SportsScreen> {
                   ])
                     Expanded(
                       child: GestureDetector(
-                        onTap: () =>
-                            ref.read(_sportsFilterProvider.notifier).set(entry.$1),
+                        onTap: () => ref
+                            .read(_sportsFilterProvider.notifier)
+                            .set(entry.$1),
                         child: Container(
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           decoration: BoxDecoration(
                             color: filter == entry.$1
                                 ? AppColors.bgPanel
                                 : Colors.transparent,
-                            borderRadius:
-                                BorderRadius.circular(AppRadii.control),
+                            borderRadius: BorderRadius.circular(
+                              AppRadii.control,
+                            ),
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -138,12 +123,11 @@ class _SportsScreenState extends ConsumerState<SportsScreen> {
             child: RefreshIndicator(
               color: AppColors.accent,
               onRefresh: () async {
+                ref.invalidate(sportsCatalogProvider);
                 ref.invalidate(_sportsEventsProvider);
-                ref.invalidate(_sportsMetaProvider);
               },
               child: eventsAsync.when(
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: CircularProgressIndicator()),
                 error: (e, _) => ListView(
                   children: [
                     StateMessage(
@@ -151,8 +135,10 @@ class _SportsScreenState extends ConsumerState<SportsScreen> {
                       message: userFacingError(e),
                       tone: StateTone.error,
                       action: FilledButton(
-                        onPressed: () =>
-                            ref.invalidate(_sportsEventsProvider),
+                        onPressed: () {
+                          ref.invalidate(sportsCatalogProvider);
+                          ref.invalidate(_sportsEventsProvider);
+                        },
                         child: const Text('Retry'),
                       ),
                     ),
@@ -160,10 +146,17 @@ class _SportsScreenState extends ConsumerState<SportsScreen> {
                 ),
                 data: (res) {
                   var events = res.events;
+                  if (filter == 'live') {
+                    events = events.where((e) => e.isLive).toList();
+                  } else if (filter == 'upcoming') {
+                    events = events.where((e) => !e.isLive).toList();
+                  }
                   if (_sportChip > 0 && _sportChip <= sports.length) {
                     final sport = sports[_sportChip - 1];
                     events = events
-                        .where((e) => e.sport.toLowerCase() == sport.toLowerCase())
+                        .where(
+                          (e) => e.sport.toLowerCase() == sport.toLowerCase(),
+                        )
                         .toList();
                   }
                   if (events.isEmpty) {
@@ -221,17 +214,18 @@ class _SportsScreenState extends ConsumerState<SportsScreen> {
                             itemCount: leagues.length,
                             gridDelegate:
                                 const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 3,
-                              mainAxisSpacing: 10,
-                              crossAxisSpacing: 10,
-                              childAspectRatio: 1.05,
-                            ),
+                                  crossAxisCount: 3,
+                                  mainAxisSpacing: 10,
+                                  crossAxisSpacing: 10,
+                                  childAspectRatio: 1.05,
+                                ),
                             itemBuilder: (context, i) {
                               return Container(
                                 decoration: BoxDecoration(
                                   color: AppColors.bgPanel,
-                                  borderRadius:
-                                      BorderRadius.circular(AppRadii.sm),
+                                  borderRadius: BorderRadius.circular(
+                                    AppRadii.sm,
+                                  ),
                                 ),
                                 padding: const EdgeInsets.all(10),
                                 child: Column(
@@ -268,7 +262,8 @@ class _SportsScreenState extends ConsumerState<SportsScreen> {
                         title: upcoming.isEmpty
                             ? 'Match schedule'
                             : "Today's Matchups",
-                        subtitle: '${events.length} matches · countdown on each card',
+                        subtitle:
+                            '${events.length} matches · countdown on each card',
                       ),
                       ...upcoming.map((e) => _ScheduleCard(event: e)),
                       if (upcoming.isEmpty)
@@ -343,7 +338,7 @@ class _LiveHeroCard extends StatelessWidget {
                       style: const TextStyle(fontSize: 12),
                     ),
                   ),
-                  const SoftBadge(label: 'HD'),
+                  SoftBadge(label: event.feedsLabel),
                 ],
               ),
               const SizedBox(height: 8),
@@ -392,8 +387,7 @@ class _LiveHeroCard extends StatelessWidget {
                   pill: true,
                   expand: true,
                   style: const TextStyle(fontSize: 15),
-                  onElapsed: () =>
-                      context.push('/sports/${event.id}'),
+                  onElapsed: () => context.push('/sports/${event.id}'),
                 ),
             ],
           ),
@@ -453,7 +447,7 @@ class _ScheduleCard extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                '${event.sport.toUpperCase()} · ${event.status}',
+                '${event.sport.toUpperCase()} · ${event.status} · ${event.feedsLabel}',
                 style: const TextStyle(
                   color: AppColors.textMuted,
                   fontSize: 12,

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/providers.dart';
 import '../../app/theme.dart';
 import '../../core/errors.dart';
+import '../../data/catalog_client.dart';
 import '../../data/models.dart';
 import '../../shared/widgets.dart';
 import '../player/player_screen.dart';
@@ -23,6 +24,7 @@ class _MovieDetailScreenState extends ConsumerState<MovieDetailScreen> {
   CatalogTitle? _title;
   CatalogStreamsResponse? _streams;
   String? _error;
+  String? _streamError;
   bool _loading = true;
   bool _loadingStreams = false;
   bool _starting = false;
@@ -40,8 +42,8 @@ class _MovieDetailScreenState extends ConsumerState<MovieDetailScreen> {
       _error = null;
     });
     try {
-      final api = ref.read(apiClientProvider);
-      final title = await api.getCatalogMovie(widget.imdbId);
+      final title =
+          await ref.read(catalogClientProvider).getMovie(widget.imdbId);
       if (!mounted) return;
       setState(() {
         _title = title;
@@ -58,11 +60,14 @@ class _MovieDetailScreenState extends ConsumerState<MovieDetailScreen> {
   }
 
   Future<void> _loadStreams() async {
-    setState(() => _loadingStreams = true);
+    setState(() {
+      _loadingStreams = true;
+      _streamError = null;
+    });
     try {
       final streams = await ref
-          .read(apiClientProvider)
-          .listCatalogMovieStreams(widget.imdbId);
+          .read(catalogClientProvider)
+          .listMovieStreams(widget.imdbId);
       if (!mounted) return;
       setState(() {
         _streams = streams;
@@ -74,7 +79,7 @@ class _MovieDetailScreenState extends ConsumerState<MovieDetailScreen> {
       if (!mounted) return;
       setState(() {
         _loadingStreams = false;
-        _error = userFacingError(e);
+        _streamError = userFacingError(e);
       });
     }
   }
@@ -85,11 +90,9 @@ class _MovieDetailScreenState extends ConsumerState<MovieDetailScreen> {
     if (title == null || index == null) return;
     setState(() => _starting = true);
     try {
-      final session =
-          await ref.read(apiClientProvider).startCatalogMoviePlayback(
-                imdbId: widget.imdbId,
-                streamIndex: index,
-              );
+      final catalog = ref.read(catalogClientProvider);
+      final url = await catalog.resolveMovieStreamUrl(widget.imdbId, index);
+      await catalog.waitForPlayable(url);
       if (!mounted) return;
       final continueItems = ref.read(continueWatchingProvider);
       final prior =
@@ -98,7 +101,8 @@ class _MovieDetailScreenState extends ConsumerState<MovieDetailScreen> {
       await context.push(
         '/player',
         extra: PlayerArgs(
-          sessionId: session.sessionId,
+          streamUrl: url,
+          httpHeaders: CatalogClient.playbackHeaders,
           title: title.name,
           progressId: 'movie:${widget.imdbId}',
           progressRoute: '/movies/${widget.imdbId}',
@@ -355,9 +359,13 @@ class _MovieDetailScreenState extends ConsumerState<MovieDetailScreen> {
             child: Center(child: CircularProgressIndicator()),
           )
         else if (streams.isEmpty)
-          const Text(
-            'No streams available for this title.',
-            style: TextStyle(color: AppColors.textMuted),
+          Text(
+            _streamError ?? 'No streams available for this title.',
+            style: TextStyle(
+              color: _streamError == null
+                  ? AppColors.textMuted
+                  : AppColors.danger,
+            ),
           )
         else
           ...streams.map((s) {
